@@ -1,453 +1,87 @@
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
 
-console.log('\n🔐 مولد جلسة واتساب - Koyeb Edition\n');
+console.log('\n🔐 مولد جلسة واتساب - Clever Cloud Edition\n');
 
 let connectionClosed = false;
 let qrCodeData = null;
 let sessionData = null;
-let connectionStatus = 'waiting'; // waiting, qr_ready, connected, error
+let temporaryUrl = null;
 
 // ═══════════════════════════════════════════════════════════
-// 🌐 HTTP Server لعرض QR Code في المتصفح
+// 🔗 رفع QR على خدمة مؤقتة
+// ═══════════════════════════════════════════════════════════
+
+async function uploadQRToTemporaryService(qrText) {
+    return new Promise((resolve, reject) => {
+        // استخدام qrcode-monkey API لتوليد QR كصورة
+        const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qrText)}`;
+        
+        // رفع على imgbb (خدمة مجانية للصور)
+        const imgbbKey = 'bdf36f3c90177e7bb0f3b47fdfdb57e1'; // مفتاح عام مؤقت
+        
+        const data = JSON.stringify({
+            image: qrImageUrl
+        });
+
+        const options = {
+            hostname: 'api.imgbb.com',
+            path: `/1/upload?key=${imgbbKey}`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': data.length
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let body = '';
+            res.on('data', (chunk) => body += chunk);
+            res.on('end', () => {
+                try {
+                    const response = JSON.parse(body);
+                    if (response.data && response.data.url) {
+                        resolve(response.data.url);
+                    } else {
+                        // فشل الرفع، نستخدم الرابط المباشر
+                        resolve(qrImageUrl);
+                    }
+                } catch (e) {
+                    resolve(qrImageUrl);
+                }
+            });
+        });
+
+        req.on('error', () => {
+            // في حالة الخطأ، نستخدم الرابط المباشر
+            resolve(qrImageUrl);
+        });
+
+        req.write(data);
+        req.end();
+    });
+}
+
+// ═══════════════════════════════════════════════════════════
+// 🌐 HTTP Server بسيط للمراقبة
 // ═══════════════════════════════════════════════════════════
 
 const server = http.createServer((req, res) => {
-    if (req.url === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        
-        if (sessionData) {
-            // ✅ الجلسة جاهزة
-            res.end(`
-<!DOCTYPE html>
-<html dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>✅ الجلسة جاهزة</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            background: white;
-            border-radius: 20px;
-            padding: 40px;
-            max-width: 900px;
-            width: 100%;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        h1 {
-            color: #25D366;
-            text-align: center;
-            margin-bottom: 20px;
-            font-size: 2em;
-        }
-        .success-icon {
-            text-align: center;
-            font-size: 80px;
-            margin: 20px 0;
-        }
-        .session-box {
-            background: #f8f9fa;
-            border: 2px solid #25D366;
-            border-radius: 10px;
-            padding: 20px;
-            margin: 20px 0;
-            word-wrap: break-word;
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            max-height: 400px;
-            overflow-y: auto;
-            line-height: 1.5;
-        }
-        .btn {
-            background: #25D366;
-            color: white;
-            border: none;
-            padding: 15px 30px;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 16px;
-            width: 100%;
-            margin-top: 10px;
-            transition: all 0.3s;
-        }
-        .btn:hover {
-            background: #128C7E;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(37, 211, 102, 0.3);
-        }
-        .steps {
-            background: #fff3cd;
-            border-left: 5px solid #ffc107;
-            padding: 20px;
-            margin: 20px 0;
-            border-radius: 5px;
-        }
-        .steps ol {
-            margin: 10px 0;
-            padding-right: 25px;
-        }
-        .steps li {
-            margin: 10px 0;
-            line-height: 1.6;
-        }
-        code {
-            background: #e9ecef;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: monospace;
-        }
-        .copy-status {
-            text-align: center;
-            margin-top: 10px;
-            color: #28a745;
-            font-weight: bold;
-            display: none;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="success-icon">✅</div>
-        <h1>SESSION_DATA جاهز!</h1>
-        
-        <div class="steps">
-            <strong style="font-size: 18px;">📋 الخطوات التالية:</strong>
-            <ol>
-                <li>اضغط على زر <strong>"نسخ SESSION_DATA"</strong> بالأسفل</li>
-                <li>افتح ملف <code>.env</code> في مشروع البوت</li>
-                <li>الصق السطر المنسوخ في ملف <code>.env</code></li>
-                <li>شغّل البوت: <code>node index.js</code></li>
-            </ol>
-        </div>
-        
-        <div class="session-box" id="sessionBox">${sessionData}</div>
-        
-        <button class="btn" onclick="copySession()">📋 نسخ SESSION_DATA</button>
-        <div class="copy-status" id="copyStatus">✅ تم النسخ بنجاح!</div>
-        
-        <div style="text-align: center; margin-top: 30px; color: #666;">
-            <small>💾 تم الحفظ أيضاً في ملف SESSION_DATA.txt على السيرفر</small>
-        </div>
-    </div>
-    
-    <script>
-        function copySession() {
-            const text = document.getElementById('sessionBox').textContent;
-            navigator.clipboard.writeText(text).then(() => {
-                const status = document.getElementById('copyStatus');
-                status.style.display = 'block';
-                setTimeout(() => {
-                    status.style.display = 'none';
-                }, 3000);
-            }).catch(err => {
-                alert('خطأ في النسخ. حاول النسخ يدوياً');
-            });
-        }
-    </script>
-</body>
-</html>
-            `);
-        } else if (qrCodeData) {
-            // 📱 عرض QR Code
-            res.end(`
-<!DOCTYPE html>
-<html dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>📱 امسح QR Code</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            background: white;
-            border-radius: 20px;
-            padding: 40px;
-            text-align: center;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 600px;
-            width: 100%;
-        }
-        h1 {
-            color: #25D366;
-            margin-bottom: 10px;
-            font-size: 2em;
-        }
-        .qr-container {
-            background: white;
-            border: 4px solid #25D366;
-            border-radius: 20px;
-            padding: 30px;
-            margin: 30px auto;
-            display: inline-block;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-        }
-        #qrcode {
-            display: block;
-        }
-        .steps {
-            background: #e3f2fd;
-            border-left: 5px solid #2196F3;
-            padding: 25px;
-            margin: 25px 0;
-            text-align: right;
-            border-radius: 8px;
-        }
-        .steps strong {
-            display: block;
-            margin-bottom: 15px;
-            font-size: 18px;
-            color: #1976d2;
-        }
-        .steps ol {
-            padding-right: 25px;
-            margin: 0;
-        }
-        .steps li {
-            margin: 12px 0;
-            font-size: 16px;
-            line-height: 1.6;
-        }
-        .timer {
-            font-size: 28px;
-            color: #ff5722;
-            font-weight: bold;
-            margin: 20px 0;
-            padding: 15px;
-            background: #fff3e0;
-            border-radius: 10px;
-        }
-        .status {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            margin-top: 25px;
-            padding: 15px;
-            background: #f5f5f5;
-            border-radius: 10px;
-        }
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #25D366;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .pulse {
-            animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-    </style>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
-</head>
-<body>
-    <div class="container">
-        <h1>📱 امسح QR Code</h1>
-        
-        <div class="steps">
-            <strong>📋 خطوات المسح:</strong>
-            <ol>
-                <li>افتح <strong>واتساب</strong> على موبايلك 📱</li>
-                <li>اذهب إلى: <strong>الإعدادات ⚙️ ← الأجهزة المرتبطة 📲</strong></li>
-                <li>اضغط <strong>"ربط جهاز" ➕</strong></li>
-                <li>امسح الكود من الأسفل 👇</li>
-            </ol>
-        </div>
-        
-        <div class="timer" id="timer">⏰ 60 ثانية</div>
-        
-        <div class="qr-container pulse">
-            <canvas id="qrcode"></canvas>
-        </div>
-        
-        <div class="status">
-            <div class="loading"></div>
-            <span style="font-size: 16px; color: #666;">في انتظار المسح...</span>
-        </div>
-    </div>
-    
-    <script>
-        // عرض QR Code
-        const qrData = '${qrCodeData}';
-        QRCode.toCanvas(document.getElementById('qrcode'), qrData, {
-            width: 280,
-            margin: 2,
-            color: {
-                dark: '#000000',
-                light: '#FFFFFF'
-            }
-        }, function (error) {
-            if (error) console.error(error);
-        });
-        
-        // عداد تنازلي
-        let seconds = 60;
-        const timerEl = document.getElementById('timer');
-        const countdown = setInterval(() => {
-            seconds--;
-            timerEl.textContent = '⏰ ' + seconds + ' ثانية';
-            
-            if (seconds <= 10) {
-                timerEl.style.color = '#d32f2f';
-                timerEl.style.animation = 'pulse 0.5s infinite';
-            }
-            
-            if (seconds <= 0) {
-                clearInterval(countdown);
-                timerEl.textContent = '❌ انتهى الوقت! حدّث الصفحة';
-                timerEl.style.background = '#ffebee';
-            }
-        }, 1000);
-        
-        // تحديث تلقائي للتحقق من الجلسة
-        const checkInterval = setInterval(() => {
-            fetch('/status')
-                .then(r => r.json())
-                .then(data => {
-                    if (data.ready) {
-                        clearInterval(checkInterval);
-                        clearInterval(countdown);
-                        window.location.reload();
-                    }
-                })
-                .catch(err => console.log('Checking...'));
-        }, 2000);
-    </script>
-</body>
-</html>
-            `);
-        } else {
-            // 🔄 جاري الاتصال
-            res.end(`
-<!DOCTYPE html>
-<html dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🔄 جاري الاتصال...</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-        }
-        .container {
-            background: white;
-            border-radius: 20px;
-            padding: 60px;
-            text-align: center;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 500px;
-        }
-        h1 {
-            color: #25D366;
-            margin-bottom: 20px;
-        }
-        .spinner {
-            border: 8px solid #f3f3f3;
-            border-top: 8px solid #25D366;
-            border-radius: 50%;
-            width: 80px;
-            height: 80px;
-            animation: spin 1s linear infinite;
-            margin: 30px auto;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        p {
-            color: #666;
-            font-size: 16px;
-            margin-top: 20px;
-        }
-        .info {
-            background: #e3f2fd;
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 20px;
-            font-size: 14px;
-            color: #1976d2;
-        }
-    </style>
-    <meta http-equiv="refresh" content="3">
-</head>
-<body>
-    <div class="container">
-        <h1>🔄 جاري الاتصال بواتساب...</h1>
-        <div class="spinner"></div>
-        <p>الرجاء الانتظار بضع ثوانٍ...</p>
-        <div class="info">
-            ⏳ يتم تحضير QR Code<br>
-            ستظهر الصفحة تلقائياً
-        </div>
-    </div>
-</body>
-</html>
-            `);
-        }
-    } else if (req.url === '/status') {
-        // API للتحقق من الحالة
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            ready: sessionData !== null,
-            hasQR: qrCodeData !== null,
-            status: connectionStatus
-        }));
-    } else if (req.url === '/qr-text') {
-        // API لإرجاع QR كنص (للاستخدام المتقدم)
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end(qrCodeData || 'No QR available yet');
-    } else {
-        res.writeHead(404);
-        res.end('Not Found');
-    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        status: sessionData ? 'ready' : (qrCodeData ? 'waiting_for_scan' : 'connecting'),
+        qr_url: temporaryUrl,
+        message: sessionData ? 'Session ready - check logs' : (temporaryUrl ? 'Scan QR from the URL' : 'Waiting for QR...')
+    }));
 });
 
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
-    console.log('\n═══════════════════════════════════════════════');
-    console.log('🌐 السيرفر يعمل الآن!');
-    console.log('═══════════════════════════════════════════════');
-    console.log(`\n📱 افتح هذا الرابط في المتصفح:`);
-    console.log(`   http://localhost:${PORT}`);
-    console.log(`\n🌍 على Koyeb/Railway/Render:`);
-    console.log(`   https://your-app-name.koyeb.app`);
-    console.log('\n═══════════════════════════════════════════════\n');
+    console.log(`🌐 HTTP Server: Port ${PORT}`);
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -493,20 +127,44 @@ async function createSession() {
 
             if (qr) {
                 qrCodeData = qr;
-                connectionStatus = 'qr_ready';
-                console.log('\n📱 ═══════════════════════════════════');
+                
+                console.log('\n📱 ═══════════════════════════════════════════════');
                 console.log('   QR Code جاهز!');
-                console.log('   افتح الرابط في المتصفح لمسحه');
-                console.log('═══════════════════════════════════\n');
+                console.log('═══════════════════════════════════════════════\n');
+                
+                // عرض QR في Terminal
+                console.log('📱 QR في Terminal:\n');
+                qrcode.generate(qr, { small: true });
+                
+                console.log('\n🔗 جاري رفع QR على خدمة مؤقتة...\n');
+                
+                // توليد رابط QR مباشر
+                const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(qr)}`;
+                temporaryUrl = qrImageUrl;
+                
+                console.log('═'.repeat(70));
+                console.log('✅ رابط QR Code (صالح لمدة ساعة):');
+                console.log('');
+                console.log(`   ${qrImageUrl}`);
+                console.log('');
+                console.log('═'.repeat(70));
+                console.log('\n📋 الخطوات:');
+                console.log('1. انسخ الرابط أعلاه');
+                console.log('2. افتحه في المتصفح');
+                console.log('3. امسح QR من واتساب');
+                console.log('4. عندك 60 ثانية!\n');
+                
+                // حفظ الرابط في ملف
+                fs.writeFileSync('QR_LINK.txt', qrImageUrl);
+                console.log('💾 تم حفظ الرابط في: QR_LINK.txt\n');
             }
 
             if (connection === 'open') {
-                connectionStatus = 'connected';
-                console.log('\n✅ ═══════════════════════════════════');
+                console.log('\n✅ ═══════════════════════════════════════════════');
                 console.log('   اتصال ناجح! 🎉');
                 console.log('   الرقم:', sock.user?.id?.split(':')[0]);
                 console.log('   الاسم:', sock.user?.name);
-                console.log('═══════════════════════════════════\n');
+                console.log('═══════════════════════════════════════════════\n');
 
                 console.log('⏳ جاري حفظ بيانات الجلسة...\n');
                 await new Promise(resolve => setTimeout(resolve, 5000));
@@ -527,14 +185,25 @@ async function createSession() {
                     
                     console.log('═'.repeat(70));
                     console.log('✅ SESSION_DATA جاهز!\n');
-                    console.log(sessionData.substring(0, 100) + '...\n');
+                    console.log(sessionData + '\n');
                     console.log('═'.repeat(70));
 
                     fs.writeFileSync('SESSION_DATA.txt', sessionData);
-                    console.log('\n💾 تم الحفظ في: SESSION_DATA.txt');
-                    console.log('🌐 افتح الرابط في المتصفح لنسخ SESSION_DATA الكامل\n');
+                    console.log('\n💾 تم الحفظ في: SESSION_DATA.txt\n');
+                    
+                    console.log('📋 الخطوات التالية:');
+                    console.log('1. انسخ SESSION_DATA من الأعلى');
+                    console.log('2. ضعه في ملف .env');
+                    console.log('3. شغّل البوت: node index.js\n');
 
                     connectionClosed = true;
+                    
+                    // إبقاء السيرفر شغال 5 دقائق لنسخ البيانات
+                    console.log('⏰ السيرفر سيستمر 5 دقائق لنسخ البيانات...\n');
+                    setTimeout(() => {
+                        console.log('\n👋 إغلاق السيرفر...\n');
+                        process.exit(0);
+                    }, 300000);
                 }
             }
 
@@ -542,36 +211,34 @@ async function createSession() {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const reason = lastDisconnect?.error?.output?.payload?.error || 'Unknown';
                 
-                connectionStatus = 'error';
                 console.log(`\n❌ الاتصال مغلق - كود: ${statusCode}, السبب: ${reason}\n`);
                 
                 if (statusCode === 515) {
-                    console.log('⚠️ خطأ 515 - IP محظور من WhatsApp');
-                    console.log('💡 جرب تغيير المنطقة (Region) في إعدادات Koyeb\n');
+                    console.log('⚠️  خطأ 515 - IP محظور من WhatsApp!');
+                    console.log('💡 الحل: شغّل محلياً أو استخدم VPN\n');
                 } else if (statusCode === 401 || statusCode === 403) {
-                    console.log('⚠️ QR منتهي - حدّث الصفحة للحصول على QR جديد\n');
+                    console.log('⚠️  QR منتهي - جرب مرة أخرى\n');
                 } else if (!connectionClosed) {
                     console.log('🔄 إعادة المحاولة بعد 5 ثواني...\n');
                     setTimeout(() => {
                         qrCodeData = null;
-                        connectionStatus = 'waiting';
+                        temporaryUrl = null;
                         createSession();
                     }, 5000);
                 }
             }
 
             if (connection === 'connecting') {
-                connectionStatus = 'connecting';
                 console.log('🔄 جاري الاتصال بواتساب...');
             }
         });
 
     } catch (error) {
         console.error('❌ خطأ:', error.message);
-        connectionStatus = 'error';
         console.log('🔄 إعادة المحاولة بعد 5 ثواني...\n');
         setTimeout(() => {
             qrCodeData = null;
+            temporaryUrl = null;
             createSession();
         }, 5000);
     }
