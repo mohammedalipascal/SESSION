@@ -1,0 +1,22 @@
+{
+  "name": "whatsapp-session-generator",
+  "version": "1.0.0",
+  "description": "WhatsApp Session Generator with Baileys",
+  "main": "generate-stable.js",
+  "scripts": {
+    "start": "node generate-stable.js",
+    "session": "node generate-stable.js"
+  },
+  "keywords": ["whatsapp", "baileys", "session"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "@hapi/boom": "^10.0.1",
+    "pino": "^9.5.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
