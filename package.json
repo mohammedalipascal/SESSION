@@ -8,13 +8,15 @@
     "session": "node generate-stable.js"
   },
   "keywords": ["whatsapp", "baileys", "session"],
-  "author": "",
+  "author": "مقداد",
   "license": "MIT",
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.9",
     "@hapi/boom": "^10.0.1",
     "pino": "^9.5.0",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "dotenv": "^16.4.7",
+    "node-cache": "^5.1.2"
   },
   "engines": {
     "node": ">=18.0.0"
