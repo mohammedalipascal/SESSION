@@ -18,7 +18,7 @@ const path = require('path');
 console.log('\n╔════════════════════════════════════════════════╗');
 console.log('║                                                ║');
 console.log('║   🔐 مولّد SESSION_DATA - مع إعادة المحاولة  ║');
-console.log('║        Baileys 6.7.8 - Auto Retry Mode        ║');
+console.log('║        Baileys 6.7.9 - Auto Retry Mode        ║');
 console.log('║                                                ║');
 console.log('╚════════════════════════════════════════════════╝\n');
 
@@ -233,7 +233,20 @@ async function generateSession() {
                         throw new Error('ملف creds.json غير موجود');
                     }
                     
-                    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+                    let creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+                    
+                    // ⭐ التحقق من التسجيل
+                    if (!creds.registered) {
+                        console.log('\n⚠️ الجلسة غير مسجلة بعد - انتظار 10 ثواني إضافية...\n');
+                        await delay(10000);
+                        
+                        // إعادة قراءة الملف
+                        creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+                        
+                        if (!creds.registered) {
+                            throw new Error('الجلسة لم تكتمل! حاول مسح QR مرة أخرى');
+                        }
+                    }
                     
                     const sessionData = { creds };
                     const sessionStr = Buffer.from(JSON.stringify(sessionData)).toString('base64');
@@ -244,6 +257,12 @@ async function generateSession() {
                     console.log('║              ✅ نجح! SESSION_DATA جاهز                ║');
                     console.log('║                                                        ║');
                     console.log('╚════════════════════════════════════════════════════════╝\n');
+                    
+                    console.log('📊 معلومات الجلسة:');
+                    console.log(`   • رقم الهاتف: ${creds.me?.id || 'غير معروف'}`);
+                    console.log(`   • الاسم: ${creds.me?.name || 'غير معروف'}`);
+                    console.log(`   • مسجل: ${creds.registered ? 'نعم ✅' : 'لا ❌'}`);
+                    console.log(`   • حجم البيانات: ${sessionStr.length} حرف\n`);
                     
                     console.log('📋 SESSION_DATA (انسخ كل النص):');
                     console.log('\n' + '─'.repeat(60));
