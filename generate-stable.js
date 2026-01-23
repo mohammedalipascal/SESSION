@@ -17,8 +17,8 @@ const path = require('path');
 
 console.log('\n╔════════════════════════════════════════════════╗');
 console.log('║                                                ║');
-console.log('║   🔐 مولّد SESSION_DATA - النسخة المستقرة    ║');
-console.log('║        Baileys 6.7.8 - Ubuntu Mode            ║');
+console.log('║   🔐 مولّد SESSION_DATA - مع إعادة المحاولة  ║');
+console.log('║        Baileys 6.7.8 - Auto Retry Mode        ║');
 console.log('║                                                ║');
 console.log('╚════════════════════════════════════════════════╝\n');
 
@@ -64,28 +64,31 @@ function displayQRLinks(links, attempt) {
 let globalSessionData = null;
 let sock = null;
 let qrAttempt = 0;
-const MAX_QR_ATTEMPTS = 3;
+let reconnectAttempts = 0;
+const MAX_QR_ATTEMPTS = 5;
+const MAX_RECONNECT = 10; // ⭐ زيادة عدد المحاولات
 
 async function generateSession() {
     try {
         console.log('🚀 بدء توليد SESSION_DATA...\n');
         
-        // حذف الجلسة القديمة
-        const authPath = path.join(__dirname, 'auth_info');
-        if (fs.existsSync(authPath)) {
-            fs.rmSync(authPath, { recursive: true, force: true });
-            console.log('🗑️ تم حذف الجلسة القديمة\n');
+        // حذف الجلسة القديمة في المحاولة الأولى فقط
+        if (reconnectAttempts === 0) {
+            const authPath = path.join(__dirname, 'auth_info');
+            if (fs.existsSync(authPath)) {
+                fs.rmSync(authPath, { recursive: true, force: true });
+                console.log('🗑️ تم حذف الجلسة القديمة\n');
+            }
         }
         
         // جلب أحدث إصدار
         const { version, isLatest } = await fetchLatestBaileysVersion();
-        console.log(`📦 Baileys v${version.join('.')} ${isLatest ? '✅' : '⚠️'}`);
-        console.log('💡 ملاحظة: استخدم الإصدار 6.7.8 للاستقرار الأفضل\n');
+        console.log(`📦 Baileys v${version.join('.')} ${isLatest ? '✅' : '⚠️'}\n`);
         
         // تحميل حالة المصادقة
         const { state, saveCreds } = await useMultiFileAuthState('auth_info');
         
-        // ⭐ إنشاء الاتصال بإعدادات Baileys 6.7.8 المستقرة
+        // ⭐ إنشاء الاتصال بإعدادات مستقرة
         sock = makeWASocket({
             version,
             logger: P({ level: 'silent' }),
@@ -149,49 +152,66 @@ async function generateSession() {
             // الاتصال مغلق
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
                 console.log(`\n❌ الاتصال مغلق - كود: ${statusCode}\n`);
                 
-                // ⭐ معالجة خاصة جداً لخطأ 515
+                // ⭐ معالجة خاصة لخطأ 515 - إعادة المحاولة!
                 if (statusCode === 515) {
-                    console.log('🚫 خطأ 515 - WhatsApp رفض الاتصال\n');
-                    console.log('⚠️ الأسباب المحتملة:');
-                    console.log('   • جلسة نشطة على جهاز آخر');
-                    console.log('   • واتساب ويب مفتوح في مكان آخر');
-                    console.log('   • محاولات اتصال سريعة جداً');
-                    console.log('   • الحساب محظور مؤقتاً\n');
+                    console.log('⚠️ خطأ 515 - سيتم إعادة المحاولة تلقائياً\n');
                     
-                    console.log('🔧 الحل الفوري:');
-                    console.log('1. افتح واتساب على الهاتف');
-                    console.log('2. الإعدادات > الأجهزة المرتبطة');
-                    console.log('3. احذف جميع الأجهزة المرتبطة');
-                    console.log('4. أغلق هذا السكريبت (Ctrl+C)');
-                    console.log('5. انتظر 5 دقائق ⏰');
-                    console.log('6. أعد تشغيل السكريبت\n');
-                    
-                    console.log('💡 نصيحة: استخدم Pairing Code بدلاً من QR\n');
-                    
-                    // لا تعيد المحاولة مع 515
-                    process.exit(1);
+                    if (reconnectAttempts < MAX_RECONNECT) {
+                        reconnectAttempts++;
+                        const delayTime = 5000; // 5 ثواني فقط
+                        
+                        console.log(`🔄 إعادة المحاولة ${reconnectAttempts}/${MAX_RECONNECT} بعد ${delayTime/1000}ث...\n`);
+                        await delay(delayTime);
+                        return generateSession();
+                    } else {
+                        console.log('❌ فشل بعد عدة محاولات\n');
+                        console.log('💡 الحل:');
+                        console.log('1. أغلق جميع جلسات واتساب ويب');
+                        console.log('2. احذف الأجهزة المرتبطة');
+                        console.log('3. انتظر 10 دقائق');
+                        console.log('4. أعد تشغيل السكريبت\n');
+                        process.exit(1);
+                    }
                 }
                 
-                // معالجة الأخطاء الأخرى
-                if (statusCode === DisconnectReason.loggedOut ||
-                    statusCode === DisconnectReason.badSession) {
-                    console.log('🔄 إعادة المحاولة بعد 5 ثواني...\n');
-                    await delay(5000);
+                // معالجة باقي الأخطاء
+                if (statusCode === DisconnectReason.restartRequired) {
+                    console.log('🔄 إعادة التشغيل مطلوبة\n');
+                    await delay(2000);
+                    reconnectAttempts++;
                     return generateSession();
                 }
                 
-                // خطأ غير متوقع
-                console.log('🔄 إعادة المحاولة بعد 10 ثواني...\n');
-                await delay(10000);
-                return generateSession();
+                if (statusCode === DisconnectReason.loggedOut ||
+                    statusCode === DisconnectReason.badSession ||
+                    statusCode === 401 || statusCode === 403 || statusCode === 440) {
+                    console.log('🚪 الجلسة منتهية - إعادة المحاولة\n');
+                    await delay(3000);
+                    reconnectAttempts++;
+                    return generateSession();
+                }
+                
+                if (shouldReconnect && reconnectAttempts < MAX_RECONNECT) {
+                    reconnectAttempts++;
+                    const delayTime = Math.min(reconnectAttempts * 2000, 10000);
+                    
+                    console.log(`🔄 إعادة المحاولة ${reconnectAttempts}/${MAX_RECONNECT} بعد ${delayTime/1000}ث...\n`);
+                    await delay(delayTime);
+                    return generateSession();
+                } else if (reconnectAttempts >= MAX_RECONNECT) {
+                    console.log('❌ فشل بعد عدة محاولات\n');
+                    process.exit(1);
+                }
             }
             
             // الاتصال ناجح
             else if (connection === 'open') {
-                qrAttempt = 0; // إعادة تعيين العداد
+                qrAttempt = 0;
+                reconnectAttempts = 0; // إعادة تعيين العداد
                 
                 console.log('\n✅ ════════════════════════════════════');
                 console.log('   🎉 متصل بواتساب بنجاح!');
@@ -199,7 +219,7 @@ async function generateSession() {
                 console.log(`   👤 الاسم: ${sock.user.name || 'غير محدد'}`);
                 console.log('════════════════════════════════════\n');
                 
-                // ⭐ انتظار طويل لضمان حفظ كامل (15 ثانية)
+                // ⭐ انتظار طويل لضمان حفظ كامل
                 console.log('⏳ جاري حفظ بيانات الجلسة كاملة...');
                 console.log('   (لا تغلق السكريبت - انتظر 15 ثانية)\n');
                 
@@ -246,7 +266,7 @@ async function generateSession() {
                     console.log('6. أضف باقي المتغيرات:');
                     console.log('   • BOT_NAME = Botly');
                     console.log('   • BOT_OWNER = مقداد');
-                    console.log('   • OWNER_NUMBER = 201234567890');
+                    console.log('   • OWNER_NUMBER = 249962204268');
                     console.log('   • REPLY_IN_GROUPS = false');
                     console.log('7. Update changes');
                     console.log('8. Restart البوت');
@@ -284,9 +304,16 @@ async function generateSession() {
         
     } catch (error) {
         console.error('❌ خطأ في التوليد:', error);
-        console.log('🔄 إعادة المحاولة بعد 15 ثانية...\n');
-        await delay(15000);
-        return generateSession();
+        
+        if (reconnectAttempts < MAX_RECONNECT) {
+            reconnectAttempts++;
+            console.log(`🔄 إعادة المحاولة ${reconnectAttempts}/${MAX_RECONNECT} بعد 10ث...\n`);
+            await delay(10000);
+            return generateSession();
+        } else {
+            console.log('❌ فشل بعد عدة محاولات\n');
+            process.exit(1);
+        }
     }
 }
 
@@ -326,8 +353,8 @@ process.on('SIGTERM', cleanup);
 
 console.log('╔════════════════════════════════════════════════╗');
 console.log('║                                                ║');
-console.log('║    🔐 SESSION_DATA Generator - Stable v6.7.8  ║');
-console.log('║        الإصدار الأكثر استقراراً ضد 515        ║');
+console.log('║    🔐 SESSION_DATA Generator - Auto Retry     ║');
+console.log('║        يعيد المحاولة تلقائياً عند 515         ║');
 console.log('║                                                ║');
 console.log('╚════════════════════════════════════════════════╝\n');
 
