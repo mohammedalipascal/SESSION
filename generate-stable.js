@@ -14,14 +14,10 @@ const http = require('http');
 
 console.log('\n╔════════════════════════════════════════════════╗');
 console.log('║                                                ║');
-console.log('║   🔐 مولّد SESSION_DATA - النسخة النهائية    ║');
-console.log('║        جلسة دائمة بدون انقطاع 🚀            ║');
+console.log('║   🔐 مولّد SESSION_DATA - نسخة محسّنة         ║');
+console.log('║        جلسة كاملة وآمنة ✅                     ║');
 console.log('║                                                ║');
 console.log('╚════════════════════════════════════════════════╝\n');
-
-// ═══════════════════════════════════════════════════════════
-// 🌐 HTTP Server
-// ═══════════════════════════════════════════════════════════
 
 const PORT = process.env.PORT || 8080;
 
@@ -36,10 +32,6 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
     console.log(`🌐 HTTP Server: http://localhost:${PORT}\n`);
 });
-
-// ═══════════════════════════════════════════════════════════
-// 🔧 Helper Functions
-// ═══════════════════════════════════════════════════════════
 
 function generateQRLinks(qrData) {
     const encoded = encodeURIComponent(qrData);
@@ -60,32 +52,32 @@ function displayQRLinks(links, attempt) {
     console.log('═'.repeat(60) + '\n');
 }
 
-// دالة حفظ auth_info كامل
-function packAuthInfo() {
+// ⭐ حفظ الجلسة الكاملة بتنسيق صحيح
+function packCompleteSession() {
     const authPath = path.join(__dirname, 'auth_info');
     
     if (!fs.existsSync(authPath)) {
         throw new Error('مجلد auth_info غير موجود');
     }
     
+    const sessionFiles = {};
     const files = fs.readdirSync(authPath);
-    const authData = {};
     
-    console.log('📁 ملفات auth_info:');
-    
+    // قراءة كل الملفات
     for (const file of files) {
         const filePath = path.join(authPath, file);
-        const content = fs.readFileSync(filePath, 'utf-8');
-        authData[file] = content;
-        console.log(`   ✅ ${file}`);
+        if (fs.statSync(filePath).isFile()) {
+            sessionFiles[file] = fs.readFileSync(filePath, 'utf-8');
+        }
     }
     
-    return authData;
+    // التحقق من وجود الملفات الأساسية
+    if (!sessionFiles['creds.json']) {
+        throw new Error('creds.json غير موجود');
+    }
+    
+    return sessionFiles;
 }
-
-// ═══════════════════════════════════════════════════════════
-// 🔐 المتغيرات
-// ═══════════════════════════════════════════════════════════
 
 let globalSessionData = null;
 let sock = null;
@@ -95,10 +87,6 @@ const MAX_QR_ATTEMPTS = 5;
 const MAX_RECONNECT = 10;
 const startTime = Date.now();
 
-// ═══════════════════════════════════════════════════════════
-// 🤖 توليد الجلسة
-// ═══════════════════════════════════════════════════════════
-
 async function generateSession() {
     try {
         if (reconnectAttempts > 0) {
@@ -107,7 +95,6 @@ async function generateSession() {
             console.log('🚀 بدء التوليد...\n');
         }
         
-        // حذف الجلسة القديمة في المرة الأولى فقط
         if (reconnectAttempts === 0) {
             const authPath = path.join(__dirname, 'auth_info');
             if (fs.existsSync(authPath)) {
@@ -140,7 +127,7 @@ async function generateSession() {
             
             getMessage: async () => undefined,
             emitOwnEvents: false,
-            fireInitQueries: true,
+            fireInitQueries: false,
             generateHighQualityLinkPreview: false,
             mobile: false,
             shouldIgnoreJid: jid => jid === 'status@broadcast',
@@ -158,7 +145,7 @@ async function generateSession() {
                 qrAttempt++;
                 
                 if (qrAttempt > MAX_QR_ATTEMPTS) {
-                    console.error('\n❌ تجاوز الحد الأقصى من محاولات QR\n');
+                    console.error('\n❌ تجاوز الحد الأقصى\n');
                     process.exit(1);
                 }
                 
@@ -171,23 +158,21 @@ async function generateSession() {
                 
                 console.log(`\n❌ الاتصال مغلق - كود: ${statusCode}\n`);
                 
-                // معالجة 515
                 if (statusCode === 515) {
-                    console.log('🚫 خطأ 515 - إعادة المحاولة بعد 3 ثوانٍ\n');
+                    console.log('🚫 خطأ 515 - إعادة المحاولة\n');
                     
                     if (reconnectAttempts < MAX_RECONNECT) {
                         reconnectAttempts++;
-                        console.log(`🔄 محاولة ${reconnectAttempts}/${MAX_RECONNECT} بعد 3ث...\n`);
-                        await delay(3000); // ✅ 3 ثوانٍ فقط
+                        console.log(`🔄 محاولة ${reconnectAttempts}/${MAX_RECONNECT} بعد 5ث...\n`);
+                        await delay(5000);
                         return generateSession();
                     } else {
-                        console.log('❌ فشل بعد عدة محاولات\n');
+                        console.log('❌ فشل بعد 10 محاولات\n');
                         process.exit(1);
                     }
                 }
                 
                 if (statusCode === DisconnectReason.restartRequired) {
-                    console.log('🔄 إعادة تشغيل مطلوبة\n');
                     await delay(2000);
                     reconnectAttempts++;
                     return generateSession();
@@ -196,7 +181,6 @@ async function generateSession() {
                 if (statusCode === DisconnectReason.loggedOut ||
                     statusCode === DisconnectReason.badSession ||
                     statusCode === 401 || statusCode === 403 || statusCode === 440) {
-                    console.log('🚪 جلسة منتهية - إعادة المحاولة\n');
                     await delay(3000);
                     reconnectAttempts++;
                     return generateSession();
@@ -207,7 +191,7 @@ async function generateSession() {
                 if (shouldReconnect && reconnectAttempts < MAX_RECONNECT) {
                     reconnectAttempts++;
                     const delayTime = Math.min(reconnectAttempts * 2000, 10000);
-                    console.log(`🔄 إعادة المحاولة بعد ${delayTime/1000}ث...\n`);
+                    console.log(`🔄 إعادة بعد ${delayTime/1000}ث...\n`);
                     await delay(delayTime);
                     return generateSession();
                 }
@@ -223,16 +207,19 @@ async function generateSession() {
                 console.log(`   👤 ${sock.user.name || 'غير محدد'}`);
                 console.log('════════════════════════════════════\n');
                 
-                console.log('⏳ انتظار حفظ البيانات (30 ثانية)...\n');
+                console.log('⏳ انتظار حفظ كل البيانات (30 ثانية)...\n');
                 
-                // انتظار حفظ كل الملفات
+                // ⭐ انتظار أطول لضمان حفظ كل المفاتيح
                 await delay(30000);
                 
                 try {
-                    console.log('\n📦 تجميع ملفات الجلسة...\n');
+                    console.log('\n📦 تجميع SESSION الكاملة...\n');
                     
-                    const authData = packAuthInfo();
-                    const sessionStr = Buffer.from(JSON.stringify(authData)).toString('base64');
+                    // ⭐ حفظ الجلسة الكاملة مع كل الملفات
+                    const completeSession = packCompleteSession();
+                    
+                    // تحويل لـ Base64
+                    const sessionStr = Buffer.from(JSON.stringify(completeSession)).toString('base64');
                     globalSessionData = sessionStr;
                     
                     console.log('\n╔════════════════════════════════════════════════════════╗');
@@ -246,38 +233,39 @@ async function generateSession() {
                     console.log(sessionStr);
                     console.log('─'.repeat(60) + '\n');
                     
-                    // حفظ في ملف
                     const sessionFile = path.join(__dirname, 'SESSION_DATA.txt');
                     fs.writeFileSync(sessionFile, sessionStr);
                     console.log(`💾 محفوظ في: SESSION_DATA.txt\n`);
                     
-                    console.log('📝 الخطوات التالية:\n');
+                    // إحصائيات
+                    const filesCount = Object.keys(completeSession).length;
+                    console.log('📊 معلومات:');
+                    console.log(`   • عدد الملفات: ${filesCount}`);
+                    console.log(`   • حجم: ${sessionStr.length} حرف`);
+                    console.log(`   • محاولات: ${reconnectAttempts}`);
+                    console.log(`   • وقت: ${Math.floor((Date.now() - startTime) / 1000)}ث\n`);
+                    
+                    console.log('📝 الخطوات:\n');
                     console.log('1. انسخ SESSION_DATA أعلاه');
                     console.log('2. Clever Cloud > Environment Variables');
                     console.log('3. Add: SESSION_DATA = <الكود>');
-                    console.log('4. أضف باقي المتغيرات:');
-                    console.log('   • BOT_NAME = Botly');
-                    console.log('   • BOT_OWNER = مقداد');
-                    console.log('   • OWNER_NUMBER = 249962204268');
-                    console.log('   • REPLY_IN_GROUPS = false');
-                    console.log('5. Update & Restart\n');
+                    console.log('4. أضف المتغيرات الأخرى:');
+                    console.log('   AI_ENABLED=true');
+                    console.log('   AI_API_KEY=<your_key>');
+                    console.log('   BOT_NAME=Botly');
+                    console.log('   BOT_OWNER=مقداد');
+                    console.log('   OWNER_NUMBER=249962204268');
+                    console.log('   REPLY_IN_GROUPS=false');
+                    console.log('5. Deploy\n');
                     
-                    console.log('📊 إحصائيات:');
-                    console.log(`   • محاولات: ${reconnectAttempts}`);
-                    console.log(`   • وقت: ${Math.floor((Date.now() - startTime) / 1000)} ثانية`);
-                    console.log(`   • حجم: ${sessionStr.length} حرف\n`);
+                    console.log('💡 سيتوقف بعد 5 دقائق...\n');
                     
-                    // ✅ إزالة التوقف التلقائي - البوت يبقى يعمل
-                    console.log('✅ البوت سيبقى متصلاً');
-                    console.log('⚠️  للإيقاف: اضغط Ctrl+C\n');
-                    
-                    // ✅ لا يوجد logout تلقائي
-                    // ✅ لا يوجد process.exit
-                    // البوت يبقى متصل للأبد حتى تضغط Ctrl+C
+                    await delay(300000);
+                    process.exit(0);
                     
                 } catch (error) {
-                    console.error('❌ فشل حفظ SESSION_DATA:', error.message);
-                    console.log('\n💡 لكن البوت متصل، SESSION_DATA في auth_info/\n');
+                    console.error('❌ فشل الحفظ:', error.message);
+                    process.exit(1);
                 }
             }
             
@@ -293,7 +281,7 @@ async function generateSession() {
         
         if (reconnectAttempts < MAX_RECONNECT) {
             reconnectAttempts++;
-            console.log(`🔄 إعادة المحاولة بعد 10ث...\n`);
+            console.log(`🔄 إعادة بعد 10ث...\n`);
             await delay(10000);
             return generateSession();
         } else {
@@ -302,30 +290,21 @@ async function generateSession() {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// 🛑 معالجة الإيقاف اليدوي فقط
-// ═══════════════════════════════════════════════════════════
-
 async function cleanup() {
-    console.log('\n\n👋 إيقاف البوت...\n');
+    console.log('\n\n👋 إيقاف...\n');
     
     if (globalSessionData) {
-        console.log('✅ SESSION_DATA محفوظ في SESSION_DATA.txt\n');
-        console.log('📋 أو انسخه من هنا:');
+        console.log('✅ SESSION_DATA:');
         console.log('─'.repeat(60));
         console.log(globalSessionData);
         console.log('─'.repeat(60) + '\n');
     }
     
-    // ✅ عدم logout عند الإيقاف - الجلسة تبقى
-    // if (sock) {
-    //     try {
-    //         await sock.logout(); // ❌ تم تعطيله
-    //     } catch (e) {}
-    // }
-    
-    console.log('💡 الجلسة محفوظة في auth_info/');
-    console.log('💡 يمكنك إعادة التشغيل بدون QR\n');
+    if (sock) {
+        try {
+            await sock.logout();
+        } catch (e) {}
+    }
     
     server.close();
     process.exit(0);
@@ -333,17 +312,5 @@ async function cleanup() {
 
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
-
-process.on('unhandledRejection', (err) => {
-    console.error('❌ Unhandled Rejection:', err);
-});
-
-process.on('uncaughtException', (err) => {
-    console.error('❌ Uncaught Exception:', err);
-});
-
-// ═══════════════════════════════════════════════════════════
-// 🚀 بدء التوليد
-// ═══════════════════════════════════════════════════════════
 
 generateSession();
