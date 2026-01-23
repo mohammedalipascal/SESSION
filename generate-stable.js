@@ -14,8 +14,8 @@ const http = require('http');
 
 console.log('\n╔════════════════════════════════════════════════╗');
 console.log('║                                                ║');
-console.log('║   🔐 مولّد SESSION_DATA - الحل النهائي       ║');
-console.log('║        حفظ auth_info كامل بـ Base64 📦        ║');
+console.log('║   🔐 مولّد SESSION_DATA - النسخة النهائية    ║');
+console.log('║        جلسة دائمة بدون انقطاع 🚀            ║');
 console.log('║                                                ║');
 console.log('╚════════════════════════════════════════════════╝\n');
 
@@ -60,7 +60,7 @@ function displayQRLinks(links, attempt) {
     console.log('═'.repeat(60) + '\n');
 }
 
-// ⭐ دالة حفظ auth_info كامل
+// دالة حفظ auth_info كامل
 function packAuthInfo() {
     const authPath = path.join(__dirname, 'auth_info');
     
@@ -107,6 +107,7 @@ async function generateSession() {
             console.log('🚀 بدء التوليد...\n');
         }
         
+        // حذف الجلسة القديمة في المرة الأولى فقط
         if (reconnectAttempts === 0) {
             const authPath = path.join(__dirname, 'auth_info');
             if (fs.existsSync(authPath)) {
@@ -157,7 +158,7 @@ async function generateSession() {
                 qrAttempt++;
                 
                 if (qrAttempt > MAX_QR_ATTEMPTS) {
-                    console.error('\n❌ تجاوز الحد الأقصى\n');
+                    console.error('\n❌ تجاوز الحد الأقصى من محاولات QR\n');
                     process.exit(1);
                 }
                 
@@ -170,22 +171,23 @@ async function generateSession() {
                 
                 console.log(`\n❌ الاتصال مغلق - كود: ${statusCode}\n`);
                 
-                // ⭐ معالجة 515
+                // معالجة 515
                 if (statusCode === 515) {
-                    console.log('🚫 خطأ 515 - إعادة المحاولة\n');
+                    console.log('🚫 خطأ 515 - إعادة المحاولة بعد 3 ثوانٍ\n');
                     
                     if (reconnectAttempts < MAX_RECONNECT) {
                         reconnectAttempts++;
-                        console.log(`🔄 محاولة ${reconnectAttempts}/${MAX_RECONNECT} بعد 5ث...\n`);
-                        await delay(5000);
+                        console.log(`🔄 محاولة ${reconnectAttempts}/${MAX_RECONNECT} بعد 3ث...\n`);
+                        await delay(3000); // ✅ 3 ثوانٍ فقط
                         return generateSession();
                     } else {
-                        console.log('❌ فشل بعد 10 محاولات\n');
+                        console.log('❌ فشل بعد عدة محاولات\n');
                         process.exit(1);
                     }
                 }
                 
                 if (statusCode === DisconnectReason.restartRequired) {
+                    console.log('🔄 إعادة تشغيل مطلوبة\n');
                     await delay(2000);
                     reconnectAttempts++;
                     return generateSession();
@@ -194,6 +196,7 @@ async function generateSession() {
                 if (statusCode === DisconnectReason.loggedOut ||
                     statusCode === DisconnectReason.badSession ||
                     statusCode === 401 || statusCode === 403 || statusCode === 440) {
+                    console.log('🚪 جلسة منتهية - إعادة المحاولة\n');
                     await delay(3000);
                     reconnectAttempts++;
                     return generateSession();
@@ -204,7 +207,7 @@ async function generateSession() {
                 if (shouldReconnect && reconnectAttempts < MAX_RECONNECT) {
                     reconnectAttempts++;
                     const delayTime = Math.min(reconnectAttempts * 2000, 10000);
-                    console.log(`🔄 إعادة بعد ${delayTime/1000}ث...\n`);
+                    console.log(`🔄 إعادة المحاولة بعد ${delayTime/1000}ث...\n`);
                     await delay(delayTime);
                     return generateSession();
                 }
@@ -220,18 +223,15 @@ async function generateSession() {
                 console.log(`   👤 ${sock.user.name || 'غير محدد'}`);
                 console.log('════════════════════════════════════\n');
                 
-                console.log('⏳ انتظار حفظ كامل البيانات (30 ثانية)...\n');
+                console.log('⏳ انتظار حفظ البيانات (30 ثانية)...\n');
                 
-                // ⭐ انتظار طويل لضمان حفظ كل الملفات
+                // انتظار حفظ كل الملفات
                 await delay(30000);
                 
                 try {
-                    // ⭐ حفظ auth_info كامل
                     console.log('\n📦 تجميع ملفات الجلسة...\n');
                     
                     const authData = packAuthInfo();
-                    
-                    // تحويل لـ Base64
                     const sessionStr = Buffer.from(JSON.stringify(authData)).toString('base64');
                     globalSessionData = sessionStr;
                     
@@ -246,15 +246,16 @@ async function generateSession() {
                     console.log(sessionStr);
                     console.log('─'.repeat(60) + '\n');
                     
+                    // حفظ في ملف
                     const sessionFile = path.join(__dirname, 'SESSION_DATA.txt');
                     fs.writeFileSync(sessionFile, sessionStr);
                     console.log(`💾 محفوظ في: SESSION_DATA.txt\n`);
                     
-                    console.log('📝 الخطوات:\n');
+                    console.log('📝 الخطوات التالية:\n');
                     console.log('1. انسخ SESSION_DATA أعلاه');
                     console.log('2. Clever Cloud > Environment Variables');
                     console.log('3. Add: SESSION_DATA = <الكود>');
-                    console.log('4. أضف:');
+                    console.log('4. أضف باقي المتغيرات:');
                     console.log('   • BOT_NAME = Botly');
                     console.log('   • BOT_OWNER = مقداد');
                     console.log('   • OWNER_NUMBER = 249962204268');
@@ -263,17 +264,20 @@ async function generateSession() {
                     
                     console.log('📊 إحصائيات:');
                     console.log(`   • محاولات: ${reconnectAttempts}`);
-                    console.log(`   • وقت: ${Math.floor((Date.now() - startTime) / 1000)}ث`);
+                    console.log(`   • وقت: ${Math.floor((Date.now() - startTime) / 1000)} ثانية`);
                     console.log(`   • حجم: ${sessionStr.length} حرف\n`);
                     
-                    console.log('💡 سيتوقف بعد 5 دقائق...\n');
+                    // ✅ إزالة التوقف التلقائي - البوت يبقى يعمل
+                    console.log('✅ البوت سيبقى متصلاً');
+                    console.log('⚠️  للإيقاف: اضغط Ctrl+C\n');
                     
-                    await delay(300000);
-                    process.exit(0);
+                    // ✅ لا يوجد logout تلقائي
+                    // ✅ لا يوجد process.exit
+                    // البوت يبقى متصل للأبد حتى تضغط Ctrl+C
                     
                 } catch (error) {
-                    console.error('❌ فشل الحفظ:', error.message);
-                    process.exit(1);
+                    console.error('❌ فشل حفظ SESSION_DATA:', error.message);
+                    console.log('\n💡 لكن البوت متصل، SESSION_DATA في auth_info/\n');
                 }
             }
             
@@ -289,7 +293,7 @@ async function generateSession() {
         
         if (reconnectAttempts < MAX_RECONNECT) {
             reconnectAttempts++;
-            console.log(`🔄 إعادة بعد 10ث...\n`);
+            console.log(`🔄 إعادة المحاولة بعد 10ث...\n`);
             await delay(10000);
             return generateSession();
         } else {
@@ -299,24 +303,29 @@ async function generateSession() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🛑 معالجة الإيقاف
+// 🛑 معالجة الإيقاف اليدوي فقط
 // ═══════════════════════════════════════════════════════════
 
 async function cleanup() {
-    console.log('\n\n👋 إيقاف...\n');
+    console.log('\n\n👋 إيقاف البوت...\n');
     
     if (globalSessionData) {
-        console.log('✅ SESSION_DATA:');
+        console.log('✅ SESSION_DATA محفوظ في SESSION_DATA.txt\n');
+        console.log('📋 أو انسخه من هنا:');
         console.log('─'.repeat(60));
         console.log(globalSessionData);
         console.log('─'.repeat(60) + '\n');
     }
     
-    if (sock) {
-        try {
-            await sock.logout();
-        } catch (e) {}
-    }
+    // ✅ عدم logout عند الإيقاف - الجلسة تبقى
+    // if (sock) {
+    //     try {
+    //         await sock.logout(); // ❌ تم تعطيله
+    //     } catch (e) {}
+    // }
+    
+    console.log('💡 الجلسة محفوظة في auth_info/');
+    console.log('💡 يمكنك إعادة التشغيل بدون QR\n');
     
     server.close();
     process.exit(0);
@@ -325,8 +334,16 @@ async function cleanup() {
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 
+process.on('unhandledRejection', (err) => {
+    console.error('❌ Unhandled Rejection:', err);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught Exception:', err);
+});
+
 // ═══════════════════════════════════════════════════════════
-// 🚀 بدء
+// 🚀 بدء التوليد
 // ═══════════════════════════════════════════════════════════
 
 generateSession();
