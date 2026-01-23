@@ -1,196 +1,326 @@
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
-const pino = require('pino');
-const qrcode = require('qrcode-terminal');
+require('dotenv').config();
+const { 
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    Browsers,
+    delay
+} = require('@whiskeysockets/baileys');
+const P = require('pino');
 const fs = require('fs');
+const path = require('path');
+const readline = require('readline');
 
-console.log('\n🔐 مولد الجلسة - الإصدار النهائي\n');
-console.log('⚠️  نصائح مهمة:');
-console.log('   ✅ أغلق VPN تماماً');
-console.log('   ✅ استخدم شبكة Wi-Fi منزلية عادية');
-console.log('   ✅ تأكد أن واتساب محدث');
-console.log('   ✅ جرب من موبايل data إذا فشلت المحاولة\n');
+// ═══════════════════════════════════════════════════════════
+// ⚙️ الإعدادات
+// ═══════════════════════════════════════════════════════════
 
-let connectionClosed = false;
-const MAX_QR_RETRIES = 1; // محاولة واحدة فقط
-let qrAttempts = 0;
+const USE_PAIRING_CODE = process.env.USE_PAIRING_CODE === 'true';
+const PHONE_NUMBER = process.env.PHONE_NUMBER || '';
 
-async function createSession() {
+console.log('\n╔════════════════════════════════════════════════╗');
+console.log('║                                                ║');
+console.log('║   🔐 سكريبت توليد SESSION_DATA - Ubuntu      ║');
+console.log('║                                                ║');
+console.log('╚════════════════════════════════════════════════╝\n');
+
+if (USE_PAIRING_CODE && !PHONE_NUMBER) {
+    console.error('❌ خطأ: PHONE_NUMBER مطلوب عند استخدام Pairing Code\n');
+    console.log('💡 أضف في ملف .env:');
+    console.log('   PHONE_NUMBER=201234567890  # رقمك بدون + أو 00');
+    console.log('   USE_PAIRING_CODE=true\n');
+    process.exit(1);
+}
+
+console.log(`⚙️ الوضع: ${USE_PAIRING_CODE ? '🔑 Pairing Code' : '📱 QR Code'}`);
+if (USE_PAIRING_CODE) {
+    console.log(`📱 الرقم: ${PHONE_NUMBER}`);
+}
+console.log('');
+
+// ═══════════════════════════════════════════════════════════
+// 🔧 Helper Functions
+// ═══════════════════════════════════════════════════════════
+
+function generateQRLinks(qrData) {
+    const encoded = encodeURIComponent(qrData);
+    return {
+        primary: `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encoded}`,
+        alternative: `https://chart.googleapis.com/chart?chs=500x500&cht=qr&chl=${encoded}`
+    };
+}
+
+function displayQRLinks(links) {
+    console.log('\n╔════════════════════════════════════════════════════════╗');
+    console.log('║                                                        ║');
+    console.log('║           📱 روابط QR Code - افتح أي رابط!           ║');
+    console.log('║                                                        ║');
+    console.log('╚════════════════════════════════════════════════════════╝\n');
+    
+    console.log('🔗 الرابط الرئيسي:');
+    console.log(`   ${links.primary}\n`);
+    
+    console.log('🔗 رابط بديل:');
+    console.log(`   ${links.alternative}\n`);
+    
+    console.log('📱 الخطوات:');
+    console.log('   1. افتح الرابط في المتصفح');
+    console.log('   2. امسح الكود بواتساب');
+    console.log('   3. انتظر الاتصال (10 ثواني)...\n');
+    
+    console.log('═'.repeat(60) + '\n');
+}
+
+// ═══════════════════════════════════════════════════════════
+// 🔐 توليد SESSION_DATA
+// ═══════════════════════════════════════════════════════════
+
+let globalSessionData = null;
+let sock = null;
+
+async function generateSession() {
     try {
-        const authPath = './auth_info';
+        console.log('🚀 بدء توليد SESSION_DATA...\n');
+        
+        // حذف الجلسة القديمة
+        const authPath = path.join(__dirname, 'auth_info');
         if (fs.existsSync(authPath)) {
             fs.rmSync(authPath, { recursive: true, force: true });
-            console.log('🗑️  حذف الجلسة القديمة\n');
+            console.log('🗑️ تم حذف الجلسة القديمة\n');
         }
-
-        console.log('📦 جاري التحقق من أحدث إصدار Baileys...');
+        
+        // جلب أحدث إصدار
         const { version, isLatest } = await fetchLatestBaileysVersion();
-        console.log(`✅ إصدار Baileys: ${version.join('.')}`);
-        console.log(`${isLatest ? '✅ أحدث إصدار' : '⚠️ يوجد تحديث'}\n`);
-
+        console.log(`📦 Baileys v${version.join('.')} ${isLatest ? '✅' : '⚠️'}\n`);
+        
+        // تحميل حالة المصادقة
         const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-
-        const sock = makeWASocket({
+        
+        // إنشاء الاتصال
+        sock = makeWASocket({
             version,
+            logger: P({ level: 'silent' }),
+            printQRInTerminal: false,
+            
             auth: {
                 creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+                keys: makeCacheableSignalKeyStore(state.keys, P({ level: 'silent' }))
             },
-            printQRInTerminal: false,
-            logger: pino({ level: 'silent' }),
-            browser: ['Windows', 'Chrome', '10.0'], // تغيير البراوزر
-            defaultQueryTimeoutMs: 60000,
-            syncFullHistory: false,
+            
+            // ⭐ إعدادات Ubuntu المستقرة
+            browser: Browsers.ubuntu('Desktop'),
             markOnlineOnConnect: false,
+            syncFullHistory: false,
+            
+            defaultQueryTimeoutMs: 60000,
             connectTimeoutMs: 60000,
-            getMessage: async (key) => {
-                return { conversation: '' };
-            }
+            qrTimeout: 60000,
+            
+            getMessage: async () => undefined,
+            
+            emitOwnEvents: false,
+            fireInitQueries: true,
+            generateHighQualityLinkPreview: false,
+            
+            mobile: false,
+            shouldIgnoreJid: jid => jid === 'status@broadcast'
         });
 
+        // حفظ التحديثات
         sock.ev.on('creds.update', saveCreds);
 
+        // ⭐ طلب Pairing Code إذا مفعّل
+        if (USE_PAIRING_CODE && !state.creds.registered) {
+            console.log('🔑 جاري طلب Pairing Code...\n');
+            
+            await delay(3000);
+            
+            try {
+                const code = await sock.requestPairingCode(PHONE_NUMBER);
+                
+                console.log('\n' + '═'.repeat(60));
+                console.log('🔑 PAIRING CODE:');
+                console.log('═'.repeat(60));
+                console.log('\n        ' + code + '\n');
+                console.log('═'.repeat(60));
+                
+                console.log('\n📱 الخطوات:');
+                console.log('1. افتح واتساب');
+                console.log('2. الإعدادات > الأجهزة المرتبطة');
+                console.log('3. ربط جهاز');
+                console.log('4. ربط باستخدام رقم الهاتف');
+                console.log(`5. أدخل الكود: ${code}\n`);
+                
+            } catch (error) {
+                console.error('❌ فشل طلب Pairing Code:', error.message);
+                console.log('💡 تأكد أن رقم الهاتف صحيح\n');
+                process.exit(1);
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        // 📱 معالجة الاتصال
+        // ═══════════════════════════════════════════════════════════
+        
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
-
-            if (qr) {
-                qrAttempts++;
-                
-                if (qrAttempts > MAX_QR_RETRIES) {
-                    console.log('\n❌ تجاوزت الحد الأقصى لمحاولات QR');
-                    console.log('⏰ انتظر 1-2 ساعة وحاول مرة أخرى\n');
-                    process.exit(1);
-                }
-                
-                console.log('\n📱 ═══════════════════════════════════════════════');
-                console.log(`   QR Code جاهز (محاولة ${qrAttempts}/${MAX_QR_RETRIES})`);
-                console.log('═══════════════════════════════════════════════\n');
-                
-                // عرض QR في Terminal
-                qrcode.generate(qr, { small: true });
-                
-                console.log('\n⏰ عندك 60 ثانية لمسح الكود بسرعة!\n');
-                console.log('💡 نصيحة: افتح كاميرا واتساب مسبقاً وامسح فوراً\n');
+            
+            // عرض QR Code
+            if (qr && !USE_PAIRING_CODE) {
+                const links = generateQRLinks(qr);
+                displayQRLinks(links);
             }
-
-            if (connection === 'open') {
-                console.log('\n✅ ═══════════════════════════════════════════════');
-                console.log('   اتصال ناجح! 🎉🎉🎉');
-                console.log('   الرقم:', sock.user?.id?.split(':')[0]);
-                console.log('   الاسم:', sock.user?.name);
-                console.log('═══════════════════════════════════════════════\n');
-
-                console.log('⏳ جاري حفظ بيانات الجلسة...\n');
-                await new Promise(resolve => setTimeout(resolve, 5000));
-
-                const credsPath = './auth_info/creds.json';
-
-                if (fs.existsSync(credsPath)) {
-                    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
-                    
-                    if (!creds.noiseKey || !creds.signedIdentityKey) {
-                        throw new Error('بيانات الجلسة غير كاملة');
-                    }
-                    
-                    const session = { creds };
-                    const sessionString = Buffer.from(JSON.stringify(session)).toString('base64');
-
-                    const sessionData = `SESSION_DATA=${sessionString}`;
-                    
-                    console.log('═'.repeat(70));
-                    console.log('✅ SESSION_DATA جاهز!\n');
-                    console.log(sessionData + '\n');
-                    console.log('═'.repeat(70));
-
-                    // حفظ في ملف
-                    fs.writeFileSync('SESSION_DATA.txt', sessionData);
-                    console.log('\n💾 تم الحفظ في: SESSION_DATA.txt\n');
-                    
-                    console.log('📋 الخطوات التالية:');
-                    console.log('1. انسخ SESSION_DATA من الأعلى أو من ملف SESSION_DATA.txt');
-                    console.log('2. اذهب إلى Render/Clever Cloud Dashboard');
-                    console.log('3. Environment Variables → أضف متغير جديد:');
-                    console.log('   Key: SESSION_DATA');
-                    console.log('   Value: (الصق الكود الكامل)');
-                    console.log('4. احفظ وأعد نشر التطبيق\n');
-
-                    connectionClosed = true;
-                    
-                    console.log('✅ تم! يمكنك إغلاق السكريبت الآن (Ctrl+C)\n');
-                    
-                    // إغلاق بعد 30 ثانية
-                    setTimeout(() => {
-                        console.log('👋 إغلاق تلقائي...\n');
-                        process.exit(0);
-                    }, 30000);
-                }
-            }
-
+            
+            // الاتصال مغلق
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const reason = lastDisconnect?.error?.output?.payload?.error || 'Unknown';
                 
-                console.log(`\n❌ الاتصال مغلق\n`);
-                console.log(`   كود الخطأ: ${statusCode}`);
-                console.log(`   السبب: ${reason}\n`);
+                console.log(`\n❌ الاتصال مغلق - كود: ${statusCode}\n`);
                 
-                if (statusCode === 515) {
-                    console.log('═'.repeat(70));
-                    console.log('⚠️  خطأ 515 - واتساب حظر هذا الـ IP مؤقتاً\n');
-                    console.log('🔧 الحلول المجربة:\n');
-                    console.log('1️⃣  انتظر 1-2 ساعة ثم حاول مرة أخرى');
-                    console.log('2️⃣  غيّر الشبكة تماماً:');
-                    console.log('   • من Wi-Fi → موبايل data (4G/5G)');
-                    console.log('   • أو العكس');
-                    console.log('3️⃣  جرب من مكان مختلف (بيت صديق، مقهى)');
-                    console.log('4️⃣  استخدم Hotspot من موبايل مختلف');
-                    console.log('5️⃣  أغلق VPN تماماً إذا كان مفعّل');
-                    console.log('6️⃣  أعد تشغيل الراوتر وانتظر 5 دقائق\n');
-                    console.log('💡 نصيحة: واتساب بيحظر IPs بشكل مؤقت بعد عدة محاولات');
-                    console.log('   الانتظار ساعة عادةً بيحل المشكلة\n');
-                    console.log('═'.repeat(70));
-                } else if (statusCode === 401 || statusCode === 403) {
-                    console.log('⚠️  QR منتهي أو غير صحيح');
-                    console.log('💡 شغّل السكريبت مرة أخرى وامسح QR بسرعة\n');
-                } else if (statusCode === 408 || statusCode === DisconnectReason.timedOut) {
-                    console.log('⚠️  انتهت مهلة الاتصال');
-                    console.log('💡 تحقق من اتصال الإنترنت وحاول مرة أخرى\n');
-                } else if (statusCode === DisconnectReason.loggedOut) {
-                    console.log('⚠️  تم تسجيل الخروج من الجلسة\n');
-                } else {
-                    console.log('⚠️  خطأ غير متوقع\n');
+                if (statusCode === DisconnectReason.loggedOut ||
+                    statusCode === DisconnectReason.badSession) {
+                    console.log('🔄 إعادة المحاولة...\n');
+                    await delay(3000);
+                    return generateSession();
                 }
                 
-                if (!connectionClosed) {
+                if (statusCode === 515) {
+                    console.log('⚠️ خطأ 515 - انتظار 30 ثانية...\n');
+                    await delay(30000);
+                    return generateSession();
+                }
+                
+                console.log('🔄 إعادة المحاولة...\n');
+                await delay(5000);
+                return generateSession();
+            }
+            
+            // الاتصال ناجح
+            else if (connection === 'open') {
+                console.log('\n✅ ════════════════════════════════════');
+                console.log('   🎉 متصل بواتساب بنجاح!');
+                console.log(`   📱 الرقم: ${sock.user.id.split(':')[0]}`);
+                console.log(`   👤 الاسم: ${sock.user.name || 'غير محدد'}`);
+                console.log('════════════════════════════════════\n');
+                
+                // ⭐ انتظار 10 ثواني لضمان حفظ كامل
+                console.log('⏳ جاري حفظ بيانات الجلسة (10 ثواني)...\n');
+                await delay(10000);
+                
+                // تصدير SESSION_DATA
+                try {
+                    const credsPath = path.join(__dirname, 'auth_info', 'creds.json');
+                    
+                    if (!fs.existsSync(credsPath)) {
+                        throw new Error('ملف creds.json غير موجود');
+                    }
+                    
+                    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+                    
+                    const sessionData = { creds };
+                    const sessionStr = Buffer.from(JSON.stringify(sessionData)).toString('base64');
+                    globalSessionData = sessionStr;
+                    
+                    console.log('\n╔════════════════════════════════════════════════════════╗');
+                    console.log('║                                                        ║');
+                    console.log('║              ✅ نجح! SESSION_DATA جاهز                ║');
+                    console.log('║                                                        ║');
+                    console.log('╚════════════════════════════════════════════════════════╝\n');
+                    
+                    console.log('📋 انسخ SESSION_DATA التالي بالكامل:\n');
+                    console.log('─'.repeat(60));
+                    console.log(sessionStr);
+                    console.log('─'.repeat(60));
+                    
+                    // حفظ في ملف
+                    const sessionFile = path.join(__dirname, 'SESSION_DATA.txt');
+                    fs.writeFileSync(sessionFile, sessionStr);
+                    console.log(`\n💾 تم الحفظ أيضاً في: ${sessionFile}\n`);
+                    
+                    console.log('📝 الخطوات التالية:');
+                    console.log('1. انسخ SESSION_DATA أعلاه (كل النص!)');
+                    console.log('2. افتح: https://console.clever-cloud.com');
+                    console.log('3. اختر تطبيق البوت');
+                    console.log('4. Environment Variables > Add a variable');
+                    console.log('5. Name: SESSION_DATA');
+                    console.log('6. Value: [الصق النص المنسوخ]');
+                    console.log('7. Update changes');
+                    console.log('8. Restart البوت');
+                    console.log('9. ✅ البوت سيعمل بدون إعادة مسح QR!\n');
+                    
+                    console.log('⚠️ تحذيرات مهمة:');
+                    console.log('• لا تشارك SESSION_DATA مع أي شخص');
+                    console.log('• انسخ كل النص (لا تقطع منه شيء)');
+                    console.log('• تأكد من عدم وجود مسافات في البداية أو النهاية\n');
+                    
+                    console.log('✅ يمكنك إيقاف هذا السكريبت الآن (Ctrl+C)\n');
+                    
+                    // الانتظار ثم الخروج
+                    setTimeout(() => {
+                        console.log('👋 تم! يمكنك إغلاق السكريبت\n');
+                        process.exit(0);
+                    }, 5000);
+                    
+                } catch (error) {
+                    console.error('❌ فشل تصدير SESSION_DATA:', error.message);
                     process.exit(1);
                 }
             }
-
-            if (connection === 'connecting') {
+            
+            // جاري الاتصال
+            else if (connection === 'connecting') {
                 console.log('🔄 جاري الاتصال بواتساب...');
             }
         });
 
+        console.log('✅ جاهز لتوليد الجلسة...\n');
+        
     } catch (error) {
-        console.error('\n❌ خطأ فادح:', error.message);
-        console.log('\n💡 تحقق من:');
-        console.log('   • تثبيت المكتبات: npm install');
-        console.log('   • اتصال الإنترنت');
-        console.log('   • إصدار Node.js (يُفضل v18 أو أحدث)\n');
-        process.exit(1);
+        console.error('❌ خطأ في التوليد:', error);
+        console.log('🔄 إعادة المحاولة بعد 10 ثواني...\n');
+        await delay(10000);
+        return generateSession();
     }
 }
 
-// معالجة الإيقاف
-process.on('SIGINT', () => {
+// ═══════════════════════════════════════════════════════════
+// 🛑 معالجة الإيقاف
+// ═══════════════════════════════════════════════════════════
+
+async function cleanup() {
     console.log('\n\n👋 إيقاف السكريبت...\n');
+    
+    if (globalSessionData) {
+        console.log('✅ SESSION_DATA موجود - يمكنك استخدامه');
+        console.log(`💾 محفوظ في: SESSION_DATA.txt\n`);
+    } else {
+        console.log('⚠️ لم يتم توليد SESSION_DATA بعد\n');
+    }
+    
+    if (sock) {
+        try {
+            await sock.logout();
+        } catch (e) {}
+    }
+    
     process.exit(0);
-});
+}
 
-process.on('unhandledRejection', (error) => {
-    console.error('\n❌ Unhandled Rejection:', error);
-    process.exit(1);
-});
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
 
-// بدء التشغيل
-console.log('🚀 بدء عملية إنشاء الجلسة...\n');
-createSession();
+// ═══════════════════════════════════════════════════════════
+// 🚀 بدء التوليد
+// ═══════════════════════════════════════════════════════════
+
+console.log('╔════════════════════════════════════════════════╗');
+console.log('║                                                ║');
+console.log('║    🔐 مولّد SESSION_DATA - إصدار Ubuntu      ║');
+console.log('║        استخدمه مرة واحدة للحصول على           ║');
+console.log('║         SESSION_DATA ثم أضفه في ENV           ║');
+console.log('║                                                ║');
+console.log('╚════════════════════════════════════════════════╝\n');
+
+generateSession();
