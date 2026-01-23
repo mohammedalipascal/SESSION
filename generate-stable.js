@@ -1,4 +1,3 @@
-require('dotenv').config();
 const { 
     default: makeWASocket,
     useMultiFileAuthState,
@@ -11,34 +10,17 @@ const {
 const P = require('pino');
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 
 // ═══════════════════════════════════════════════════════════
 // ⚙️ الإعدادات
 // ═══════════════════════════════════════════════════════════
 
-const USE_PAIRING_CODE = process.env.USE_PAIRING_CODE === 'true';
-const PHONE_NUMBER = process.env.PHONE_NUMBER || '';
-
 console.log('\n╔════════════════════════════════════════════════╗');
 console.log('║                                                ║');
-console.log('║   🔐 سكريبت توليد SESSION_DATA - Ubuntu      ║');
+console.log('║   🔐 مولّد SESSION_DATA - النسخة المستقرة    ║');
+console.log('║        Baileys 6.7.8 - Ubuntu Mode            ║');
 console.log('║                                                ║');
 console.log('╚════════════════════════════════════════════════╝\n');
-
-if (USE_PAIRING_CODE && !PHONE_NUMBER) {
-    console.error('❌ خطأ: PHONE_NUMBER مطلوب عند استخدام Pairing Code\n');
-    console.log('💡 أضف في ملف .env:');
-    console.log('   PHONE_NUMBER=201234567890  # رقمك بدون + أو 00');
-    console.log('   USE_PAIRING_CODE=true\n');
-    process.exit(1);
-}
-
-console.log(`⚙️ الوضع: ${USE_PAIRING_CODE ? '🔑 Pairing Code' : '📱 QR Code'}`);
-if (USE_PAIRING_CODE) {
-    console.log(`📱 الرقم: ${PHONE_NUMBER}`);
-}
-console.log('');
 
 // ═══════════════════════════════════════════════════════════
 // 🔧 Helper Functions
@@ -48,28 +30,30 @@ function generateQRLinks(qrData) {
     const encoded = encodeURIComponent(qrData);
     return {
         primary: `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encoded}`,
-        alternative: `https://chart.googleapis.com/chart?chs=500x500&cht=qr&chl=${encoded}`
+        alternative: `https://chart.googleapis.com/chart?chs=500x500&cht=qr&chl=${encoded}`,
+        qrcode: `https://qrcode.tec-it.com/API/QRCode?data=${encoded}&size=large`
     };
 }
 
-function displayQRLinks(links) {
+function displayQRLinks(links, attempt) {
     console.log('\n╔════════════════════════════════════════════════════════╗');
     console.log('║                                                        ║');
-    console.log('║           📱 روابط QR Code - افتح أي رابط!           ║');
+    console.log(`║           📱 QR Code #${attempt} - امسحه فوراً!              ║`);
     console.log('║                                                        ║');
     console.log('╚════════════════════════════════════════════════════════╝\n');
     
-    console.log('🔗 الرابط الرئيسي:');
-    console.log(`   ${links.primary}\n`);
+    console.log('🔗 روابط QR Code (اختر أي رابط):');
+    console.log(`\n1️⃣ الرابط الأول:\n   ${links.primary}\n`);
+    console.log(`2️⃣ الرابط الثاني:\n   ${links.alternative}\n`);
+    console.log(`3️⃣ الرابط الثالث:\n   ${links.qrcode}\n`);
     
-    console.log('🔗 رابط بديل:');
-    console.log(`   ${links.alternative}\n`);
+    console.log('📱 خطوات سريعة:');
+    console.log('   1. افتح أي رابط أعلاه في المتصفح');
+    console.log('   2. واتساب > الأجهزة المرتبطة > ربط جهاز');
+    console.log('   3. امسح الكود فوراً (خلال 20 ثانية)');
+    console.log('   4. لا تغلق الصفحة حتى يظهر "✅ نجح"\n');
     
-    console.log('📱 الخطوات:');
-    console.log('   1. افتح الرابط في المتصفح');
-    console.log('   2. امسح الكود بواتساب');
-    console.log('   3. انتظر الاتصال (10 ثواني)...\n');
-    
+    console.log('⏰ الكود صالح لمدة 60 ثانية فقط!\n');
     console.log('═'.repeat(60) + '\n');
 }
 
@@ -79,6 +63,8 @@ function displayQRLinks(links) {
 
 let globalSessionData = null;
 let sock = null;
+let qrAttempt = 0;
+const MAX_QR_ATTEMPTS = 3;
 
 async function generateSession() {
     try {
@@ -93,12 +79,13 @@ async function generateSession() {
         
         // جلب أحدث إصدار
         const { version, isLatest } = await fetchLatestBaileysVersion();
-        console.log(`📦 Baileys v${version.join('.')} ${isLatest ? '✅' : '⚠️'}\n`);
+        console.log(`📦 Baileys v${version.join('.')} ${isLatest ? '✅' : '⚠️'}`);
+        console.log('💡 ملاحظة: استخدم الإصدار 6.7.8 للاستقرار الأفضل\n');
         
         // تحميل حالة المصادقة
         const { state, saveCreds } = await useMultiFileAuthState('auth_info');
         
-        // إنشاء الاتصال
+        // ⭐ إنشاء الاتصال بإعدادات Baileys 6.7.8 المستقرة
         sock = makeWASocket({
             version,
             logger: P({ level: 'silent' }),
@@ -109,56 +96,30 @@ async function generateSession() {
                 keys: makeCacheableSignalKeyStore(state.keys, P({ level: 'silent' }))
             },
             
-            // ⭐ إعدادات Ubuntu المستقرة
+            // ⭐ الإعدادات الأساسية المستقرة
             browser: Browsers.ubuntu('Desktop'),
             markOnlineOnConnect: false,
             syncFullHistory: false,
             
+            // ⭐ Timeout settings
             defaultQueryTimeoutMs: 60000,
             connectTimeoutMs: 60000,
-            qrTimeout: 60000,
             
+            // ⭐ إعدادات إضافية
             getMessage: async () => undefined,
-            
             emitOwnEvents: false,
             fireInitQueries: true,
             generateHighQualityLinkPreview: false,
-            
             mobile: false,
-            shouldIgnoreJid: jid => jid === 'status@broadcast'
+            shouldIgnoreJid: jid => jid === 'status@broadcast',
+            
+            // ⭐ مهم جداً لتجنب 515
+            keepAliveIntervalMs: 30000,
+            retryRequestDelayMs: 250
         });
 
         // حفظ التحديثات
         sock.ev.on('creds.update', saveCreds);
-
-        // ⭐ طلب Pairing Code إذا مفعّل
-        if (USE_PAIRING_CODE && !state.creds.registered) {
-            console.log('🔑 جاري طلب Pairing Code...\n');
-            
-            await delay(3000);
-            
-            try {
-                const code = await sock.requestPairingCode(PHONE_NUMBER);
-                
-                console.log('\n' + '═'.repeat(60));
-                console.log('🔑 PAIRING CODE:');
-                console.log('═'.repeat(60));
-                console.log('\n        ' + code + '\n');
-                console.log('═'.repeat(60));
-                
-                console.log('\n📱 الخطوات:');
-                console.log('1. افتح واتساب');
-                console.log('2. الإعدادات > الأجهزة المرتبطة');
-                console.log('3. ربط جهاز');
-                console.log('4. ربط باستخدام رقم الهاتف');
-                console.log(`5. أدخل الكود: ${code}\n`);
-                
-            } catch (error) {
-                console.error('❌ فشل طلب Pairing Code:', error.message);
-                console.log('💡 تأكد أن رقم الهاتف صحيح\n');
-                process.exit(1);
-            }
-        }
 
         // ═══════════════════════════════════════════════════════════
         // 📱 معالجة الاتصال
@@ -168,9 +129,21 @@ async function generateSession() {
             const { connection, lastDisconnect, qr } = update;
             
             // عرض QR Code
-            if (qr && !USE_PAIRING_CODE) {
+            if (qr) {
+                qrAttempt++;
+                
+                if (qrAttempt > MAX_QR_ATTEMPTS) {
+                    console.error('\n❌ تجاوز الحد الأقصى لمحاولات QR');
+                    console.log('\n💡 الحل:');
+                    console.log('1. أغلق جميع جلسات واتساب ويب');
+                    console.log('2. احذف الأجهزة المرتبطة من الهاتف');
+                    console.log('3. انتظر 10 دقائق');
+                    console.log('4. أعد تشغيل السكريبت\n');
+                    process.exit(1);
+                }
+                
                 const links = generateQRLinks(qr);
-                displayQRLinks(links);
+                displayQRLinks(links, qrAttempt);
             }
             
             // الاتصال مغلق
@@ -179,35 +152,58 @@ async function generateSession() {
                 
                 console.log(`\n❌ الاتصال مغلق - كود: ${statusCode}\n`);
                 
+                // ⭐ معالجة خاصة جداً لخطأ 515
+                if (statusCode === 515) {
+                    console.log('🚫 خطأ 515 - WhatsApp رفض الاتصال\n');
+                    console.log('⚠️ الأسباب المحتملة:');
+                    console.log('   • جلسة نشطة على جهاز آخر');
+                    console.log('   • واتساب ويب مفتوح في مكان آخر');
+                    console.log('   • محاولات اتصال سريعة جداً');
+                    console.log('   • الحساب محظور مؤقتاً\n');
+                    
+                    console.log('🔧 الحل الفوري:');
+                    console.log('1. افتح واتساب على الهاتف');
+                    console.log('2. الإعدادات > الأجهزة المرتبطة');
+                    console.log('3. احذف جميع الأجهزة المرتبطة');
+                    console.log('4. أغلق هذا السكريبت (Ctrl+C)');
+                    console.log('5. انتظر 5 دقائق ⏰');
+                    console.log('6. أعد تشغيل السكريبت\n');
+                    
+                    console.log('💡 نصيحة: استخدم Pairing Code بدلاً من QR\n');
+                    
+                    // لا تعيد المحاولة مع 515
+                    process.exit(1);
+                }
+                
+                // معالجة الأخطاء الأخرى
                 if (statusCode === DisconnectReason.loggedOut ||
                     statusCode === DisconnectReason.badSession) {
-                    console.log('🔄 إعادة المحاولة...\n');
-                    await delay(3000);
+                    console.log('🔄 إعادة المحاولة بعد 5 ثواني...\n');
+                    await delay(5000);
                     return generateSession();
                 }
                 
-                if (statusCode === 515) {
-                    console.log('⚠️ خطأ 515 - انتظار 30 ثانية...\n');
-                    await delay(30000);
-                    return generateSession();
-                }
-                
-                console.log('🔄 إعادة المحاولة...\n');
-                await delay(5000);
+                // خطأ غير متوقع
+                console.log('🔄 إعادة المحاولة بعد 10 ثواني...\n');
+                await delay(10000);
                 return generateSession();
             }
             
             // الاتصال ناجح
             else if (connection === 'open') {
+                qrAttempt = 0; // إعادة تعيين العداد
+                
                 console.log('\n✅ ════════════════════════════════════');
                 console.log('   🎉 متصل بواتساب بنجاح!');
                 console.log(`   📱 الرقم: ${sock.user.id.split(':')[0]}`);
                 console.log(`   👤 الاسم: ${sock.user.name || 'غير محدد'}`);
                 console.log('════════════════════════════════════\n');
                 
-                // ⭐ انتظار 10 ثواني لضمان حفظ كامل
-                console.log('⏳ جاري حفظ بيانات الجلسة (10 ثواني)...\n');
-                await delay(10000);
+                // ⭐ انتظار طويل لضمان حفظ كامل (15 ثانية)
+                console.log('⏳ جاري حفظ بيانات الجلسة كاملة...');
+                console.log('   (لا تغلق السكريبت - انتظر 15 ثانية)\n');
+                
+                await delay(15000);
                 
                 // تصدير SESSION_DATA
                 try {
@@ -223,48 +219,57 @@ async function generateSession() {
                     const sessionStr = Buffer.from(JSON.stringify(sessionData)).toString('base64');
                     globalSessionData = sessionStr;
                     
-                    console.log('\n╔════════════════════════════════════════════════════════╗');
+                    console.log('╔════════════════════════════════════════════════════════╗');
                     console.log('║                                                        ║');
                     console.log('║              ✅ نجح! SESSION_DATA جاهز                ║');
                     console.log('║                                                        ║');
                     console.log('╚════════════════════════════════════════════════════════╝\n');
                     
-                    console.log('📋 انسخ SESSION_DATA التالي بالكامل:\n');
-                    console.log('─'.repeat(60));
+                    console.log('📋 SESSION_DATA (انسخ كل النص):');
+                    console.log('\n' + '─'.repeat(60));
                     console.log(sessionStr);
-                    console.log('─'.repeat(60));
+                    console.log('─'.repeat(60) + '\n');
                     
                     // حفظ في ملف
                     const sessionFile = path.join(__dirname, 'SESSION_DATA.txt');
                     fs.writeFileSync(sessionFile, sessionStr);
-                    console.log(`\n💾 تم الحفظ أيضاً في: ${sessionFile}\n`);
+                    console.log(`💾 تم الحفظ في: ${sessionFile}\n`);
                     
-                    console.log('📝 الخطوات التالية:');
-                    console.log('1. انسخ SESSION_DATA أعلاه (كل النص!)');
+                    console.log('📝 الخطوات التالية:\n');
+                    console.log('1. انسخ SESSION_DATA أعلاه (كل السطر الطويل)');
                     console.log('2. افتح: https://console.clever-cloud.com');
                     console.log('3. اختر تطبيق البوت');
-                    console.log('4. Environment Variables > Add a variable');
-                    console.log('5. Name: SESSION_DATA');
-                    console.log('6. Value: [الصق النص المنسوخ]');
+                    console.log('4. Environment Variables');
+                    console.log('5. Add a variable:');
+                    console.log('   • Name: SESSION_DATA');
+                    console.log('   • Value: [الصق النص المنسوخ]');
+                    console.log('6. أضف باقي المتغيرات:');
+                    console.log('   • BOT_NAME = Botly');
+                    console.log('   • BOT_OWNER = مقداد');
+                    console.log('   • OWNER_NUMBER = 201234567890');
+                    console.log('   • REPLY_IN_GROUPS = false');
                     console.log('7. Update changes');
                     console.log('8. Restart البوت');
-                    console.log('9. ✅ البوت سيعمل بدون إعادة مسح QR!\n');
+                    console.log('9. ✅ البوت سيعمل بدون إعادة مسح!\n');
                     
-                    console.log('⚠️ تحذيرات مهمة:');
-                    console.log('• لا تشارك SESSION_DATA مع أي شخص');
-                    console.log('• انسخ كل النص (لا تقطع منه شيء)');
-                    console.log('• تأكد من عدم وجود مسافات في البداية أو النهاية\n');
+                    console.log('⚠️ تحذيرات:');
+                    console.log('• لا تشارك SESSION_DATA مع أحد');
+                    console.log('• انسخ النص كاملاً (لا تقطع منه)');
+                    console.log('• تأكد من عدم وجود مسافات زائدة\n');
                     
-                    console.log('✅ يمكنك إيقاف هذا السكريبت الآن (Ctrl+C)\n');
+                    console.log('💡 يمكنك إيقاف السكريبت الآن (Ctrl+C)\n');
+                    console.log('أو انتظر - سيتوقف تلقائياً بعد 5 دقائق...\n');
                     
-                    // الانتظار ثم الخروج
-                    setTimeout(() => {
-                        console.log('👋 تم! يمكنك إغلاق السكريبت\n');
-                        process.exit(0);
-                    }, 5000);
+                    // الانتظار ثم الإيقاف
+                    await delay(300000);
+                    console.log('👋 تم! إيقاف تلقائي\n');
+                    process.exit(0);
                     
                 } catch (error) {
                     console.error('❌ فشل تصدير SESSION_DATA:', error.message);
+                    console.log('\n💡 جرب:');
+                    console.log('1. تأكد من صلاحيات الكتابة');
+                    console.log('2. أعد تشغيل السكريبت\n');
                     process.exit(1);
                 }
             }
@@ -275,12 +280,12 @@ async function generateSession() {
             }
         });
 
-        console.log('✅ جاهز لتوليد الجلسة...\n');
+        console.log('✅ جاهز لتوليد QR Code...\n');
         
     } catch (error) {
         console.error('❌ خطأ في التوليد:', error);
-        console.log('🔄 إعادة المحاولة بعد 10 ثواني...\n');
-        await delay(10000);
+        console.log('🔄 إعادة المحاولة بعد 15 ثانية...\n');
+        await delay(15000);
         return generateSession();
     }
 }
@@ -293,10 +298,14 @@ async function cleanup() {
     console.log('\n\n👋 إيقاف السكريبت...\n');
     
     if (globalSessionData) {
-        console.log('✅ SESSION_DATA موجود - يمكنك استخدامه');
-        console.log(`💾 محفوظ في: SESSION_DATA.txt\n`);
+        console.log('✅ SESSION_DATA موجود:');
+        console.log('─'.repeat(60));
+        console.log(globalSessionData);
+        console.log('─'.repeat(60));
+        console.log(`\n💾 محفوظ في: SESSION_DATA.txt\n`);
     } else {
-        console.log('⚠️ لم يتم توليد SESSION_DATA بعد\n');
+        console.log('⚠️ لم يتم توليد SESSION_DATA بعد');
+        console.log('💡 تأكد من مسح QR Code قبل الإيقاف\n');
     }
     
     if (sock) {
@@ -317,9 +326,8 @@ process.on('SIGTERM', cleanup);
 
 console.log('╔════════════════════════════════════════════════╗');
 console.log('║                                                ║');
-console.log('║    🔐 مولّد SESSION_DATA - إصدار Ubuntu      ║');
-console.log('║        استخدمه مرة واحدة للحصول على           ║');
-console.log('║         SESSION_DATA ثم أضفه في ENV           ║');
+console.log('║    🔐 SESSION_DATA Generator - Stable v6.7.8  ║');
+console.log('║        الإصدار الأكثر استقراراً ضد 515        ║');
 console.log('║                                                ║');
 console.log('╚════════════════════════════════════════════════╝\n');
 
