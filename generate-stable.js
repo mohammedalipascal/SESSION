@@ -14,8 +14,8 @@ const http = require('http');
 
 console.log('\n╔════════════════════════════════════════════════╗');
 console.log('║                                                ║');
-console.log('║   🔐 مولّد SESSION_DATA - نسخة محسّنة         ║');
-console.log('║        جلسة كاملة وآمنة ✅                     ║');
+console.log('║   🔐 مولّد SESSION_DATA - نسخة مصغرة          ║');
+console.log('║        SESSION أصغر بـ 80% ✅                  ║');
 console.log('║                                                ║');
 console.log('╚════════════════════════════════════════════════╝\n');
 
@@ -52,31 +52,34 @@ function displayQRLinks(links, attempt) {
     console.log('═'.repeat(60) + '\n');
 }
 
-// ⭐ حفظ الجلسة الكاملة بتنسيق صحيح
-function packCompleteSession() {
+// ⭐ حفظ فقط creds.json (أصغر بكثير!)
+function packMinimalSession() {
     const authPath = path.join(__dirname, 'auth_info');
+    const credsPath = path.join(authPath, 'creds.json');
     
-    if (!fs.existsSync(authPath)) {
-        throw new Error('مجلد auth_info غير موجود');
-    }
-    
-    const sessionFiles = {};
-    const files = fs.readdirSync(authPath);
-    
-    // قراءة كل الملفات
-    for (const file of files) {
-        const filePath = path.join(authPath, file);
-        if (fs.statSync(filePath).isFile()) {
-            sessionFiles[file] = fs.readFileSync(filePath, 'utf-8');
-        }
-    }
-    
-    // التحقق من وجود الملفات الأساسية
-    if (!sessionFiles['creds.json']) {
+    if (!fs.existsSync(credsPath)) {
         throw new Error('creds.json غير موجود');
     }
     
-    return sessionFiles;
+    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+    
+    // ⭐ حذف البيانات غير الضرورية لتقليل الحجم
+    const minimalCreds = {
+        noiseKey: creds.noiseKey,
+        pairingEphemeralKeyPair: creds.pairingEphemeralKeyPair,
+        signedIdentityKey: creds.signedIdentityKey,
+        signedPreKey: creds.signedPreKey,
+        registrationId: creds.registrationId,
+        advSecretKey: creds.advSecretKey,
+        me: creds.me,
+        account: creds.account,
+        signalIdentities: creds.signalIdentities,
+        platform: creds.platform,
+        routingInfo: creds.routingInfo,
+        registered: creds.registered
+    };
+    
+    return minimalCreds;
 }
 
 let globalSessionData = null;
@@ -207,19 +210,18 @@ async function generateSession() {
                 console.log(`   👤 ${sock.user.name || 'غير محدد'}`);
                 console.log('════════════════════════════════════\n');
                 
-                console.log('⏳ انتظار حفظ كل البيانات (30 ثانية)...\n');
+                console.log('⏳ انتظار حفظ البيانات (30 ثانية)...\n');
                 
-                // ⭐ انتظار أطول لضمان حفظ كل المفاتيح
                 await delay(30000);
                 
                 try {
-                    console.log('\n📦 تجميع SESSION الكاملة...\n');
+                    console.log('\n📦 تجميع SESSION مصغر...\n');
                     
-                    // ⭐ حفظ الجلسة الكاملة مع كل الملفات
-                    const completeSession = packCompleteSession();
+                    // ⭐ حفظ فقط البيانات الضرورية
+                    const minimalCreds = packMinimalSession();
                     
                     // تحويل لـ Base64
-                    const sessionStr = Buffer.from(JSON.stringify(completeSession)).toString('base64');
+                    const sessionStr = Buffer.from(JSON.stringify(minimalCreds)).toString('base64');
                     globalSessionData = sessionStr;
                     
                     console.log('\n╔════════════════════════════════════════════════════════╗');
@@ -237,21 +239,16 @@ async function generateSession() {
                     fs.writeFileSync(sessionFile, sessionStr);
                     console.log(`💾 محفوظ في: SESSION_DATA.txt\n`);
                     
-                    // إحصائيات
-                    const filesCount = Object.keys(completeSession).length;
                     console.log('📊 معلومات:');
-                    console.log(`   • عدد الملفات: ${filesCount}`);
-                    console.log(`   • حجم: ${sessionStr.length} حرف`);
+                    console.log(`   • حجم: ${sessionStr.length} حرف (مصغر ✅)`);
                     console.log(`   • محاولات: ${reconnectAttempts}`);
                     console.log(`   • وقت: ${Math.floor((Date.now() - startTime) / 1000)}ث\n`);
                     
                     console.log('📝 الخطوات:\n');
                     console.log('1. انسخ SESSION_DATA أعلاه');
-                    console.log('2. Clever Cloud > Environment Variables');
+                    console.log('2. Render > Environment Variables');
                     console.log('3. Add: SESSION_DATA = <الكود>');
-                    console.log('4. أضف المتغيرات الأخرى:');
-                    console.log('   AI_ENABLED=true');
-                    console.log('   AI_API_KEY=<your_key>');
+                    console.log('4. أضف:');
                     console.log('   BOT_NAME=Botly');
                     console.log('   BOT_OWNER=مقداد');
                     console.log('   OWNER_NUMBER=249962204268');
