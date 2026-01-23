@@ -2,91 +2,17 @@ const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLat
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
-const http = require('http');
-const https = require('https');
 
-console.log('\n🔐 مولد جلسة واتساب - Clever Cloud Edition\n');
+console.log('\n🔐 مولد الجلسة - الإصدار النهائي\n');
+console.log('⚠️  نصائح مهمة:');
+console.log('   ✅ أغلق VPN تماماً');
+console.log('   ✅ استخدم شبكة Wi-Fi منزلية عادية');
+console.log('   ✅ تأكد أن واتساب محدث');
+console.log('   ✅ جرب من موبايل data إذا فشلت المحاولة\n');
 
 let connectionClosed = false;
-let qrCodeData = null;
-let sessionData = null;
-let temporaryUrl = null;
-
-// ═══════════════════════════════════════════════════════════
-// 🔗 رفع QR على خدمة مؤقتة
-// ═══════════════════════════════════════════════════════════
-
-async function uploadQRToTemporaryService(qrText) {
-    return new Promise((resolve, reject) => {
-        // استخدام qrcode-monkey API لتوليد QR كصورة
-        const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qrText)}`;
-        
-        // رفع على imgbb (خدمة مجانية للصور)
-        const imgbbKey = 'bdf36f3c90177e7bb0f3b47fdfdb57e1'; // مفتاح عام مؤقت
-        
-        const data = JSON.stringify({
-            image: qrImageUrl
-        });
-
-        const options = {
-            hostname: 'api.imgbb.com',
-            path: `/1/upload?key=${imgbbKey}`,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': data.length
-            }
-        };
-
-        const req = https.request(options, (res) => {
-            let body = '';
-            res.on('data', (chunk) => body += chunk);
-            res.on('end', () => {
-                try {
-                    const response = JSON.parse(body);
-                    if (response.data && response.data.url) {
-                        resolve(response.data.url);
-                    } else {
-                        // فشل الرفع، نستخدم الرابط المباشر
-                        resolve(qrImageUrl);
-                    }
-                } catch (e) {
-                    resolve(qrImageUrl);
-                }
-            });
-        });
-
-        req.on('error', () => {
-            // في حالة الخطأ، نستخدم الرابط المباشر
-            resolve(qrImageUrl);
-        });
-
-        req.write(data);
-        req.end();
-    });
-}
-
-// ═══════════════════════════════════════════════════════════
-// 🌐 HTTP Server بسيط للمراقبة
-// ═══════════════════════════════════════════════════════════
-
-const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-        status: sessionData ? 'ready' : (qrCodeData ? 'waiting_for_scan' : 'connecting'),
-        qr_url: temporaryUrl,
-        message: sessionData ? 'Session ready - check logs' : (temporaryUrl ? 'Scan QR from the URL' : 'Waiting for QR...')
-    }));
-});
-
-const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => {
-    console.log(`🌐 HTTP Server: Port ${PORT}`);
-});
-
-// ═══════════════════════════════════════════════════════════
-// 🤖 إنشاء الجلسة
-// ═══════════════════════════════════════════════════════════
+const MAX_QR_RETRIES = 1; // محاولة واحدة فقط
+let qrAttempts = 0;
 
 async function createSession() {
     try {
@@ -111,10 +37,11 @@ async function createSession() {
             },
             printQRInTerminal: false,
             logger: pino({ level: 'silent' }),
-            browser: ['WhatsApp Bot', 'Chrome', '4.0.0'],
+            browser: ['Windows', 'Chrome', '10.0'], // تغيير البراوزر
             defaultQueryTimeoutMs: 60000,
             syncFullHistory: false,
             markOnlineOnConnect: false,
+            connectTimeoutMs: 60000,
             getMessage: async (key) => {
                 return { conversation: '' };
             }
@@ -126,42 +53,28 @@ async function createSession() {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
-                qrCodeData = qr;
+                qrAttempts++;
+                
+                if (qrAttempts > MAX_QR_RETRIES) {
+                    console.log('\n❌ تجاوزت الحد الأقصى لمحاولات QR');
+                    console.log('⏰ انتظر 1-2 ساعة وحاول مرة أخرى\n');
+                    process.exit(1);
+                }
                 
                 console.log('\n📱 ═══════════════════════════════════════════════');
-                console.log('   QR Code جاهز!');
+                console.log(`   QR Code جاهز (محاولة ${qrAttempts}/${MAX_QR_RETRIES})`);
                 console.log('═══════════════════════════════════════════════\n');
                 
                 // عرض QR في Terminal
-                console.log('📱 QR في Terminal:\n');
                 qrcode.generate(qr, { small: true });
                 
-                console.log('\n🔗 جاري رفع QR على خدمة مؤقتة...\n');
-                
-                // توليد رابط QR مباشر
-                const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(qr)}`;
-                temporaryUrl = qrImageUrl;
-                
-                console.log('═'.repeat(70));
-                console.log('✅ رابط QR Code (صالح لمدة ساعة):');
-                console.log('');
-                console.log(`   ${qrImageUrl}`);
-                console.log('');
-                console.log('═'.repeat(70));
-                console.log('\n📋 الخطوات:');
-                console.log('1. انسخ الرابط أعلاه');
-                console.log('2. افتحه في المتصفح');
-                console.log('3. امسح QR من واتساب');
-                console.log('4. عندك 60 ثانية!\n');
-                
-                // حفظ الرابط في ملف
-                fs.writeFileSync('QR_LINK.txt', qrImageUrl);
-                console.log('💾 تم حفظ الرابط في: QR_LINK.txt\n');
+                console.log('\n⏰ عندك 60 ثانية لمسح الكود بسرعة!\n');
+                console.log('💡 نصيحة: افتح كاميرا واتساب مسبقاً وامسح فوراً\n');
             }
 
             if (connection === 'open') {
                 console.log('\n✅ ═══════════════════════════════════════════════');
-                console.log('   اتصال ناجح! 🎉');
+                console.log('   اتصال ناجح! 🎉🎉🎉');
                 console.log('   الرقم:', sock.user?.id?.split(':')[0]);
                 console.log('   الاسم:', sock.user?.name);
                 console.log('═══════════════════════════════════════════════\n');
@@ -181,29 +94,34 @@ async function createSession() {
                     const session = { creds };
                     const sessionString = Buffer.from(JSON.stringify(session)).toString('base64');
 
-                    sessionData = `SESSION_DATA=${sessionString}`;
+                    const sessionData = `SESSION_DATA=${sessionString}`;
                     
                     console.log('═'.repeat(70));
                     console.log('✅ SESSION_DATA جاهز!\n');
                     console.log(sessionData + '\n');
                     console.log('═'.repeat(70));
 
+                    // حفظ في ملف
                     fs.writeFileSync('SESSION_DATA.txt', sessionData);
                     console.log('\n💾 تم الحفظ في: SESSION_DATA.txt\n');
                     
                     console.log('📋 الخطوات التالية:');
-                    console.log('1. انسخ SESSION_DATA من الأعلى');
-                    console.log('2. ضعه في ملف .env');
-                    console.log('3. شغّل البوت: node index.js\n');
+                    console.log('1. انسخ SESSION_DATA من الأعلى أو من ملف SESSION_DATA.txt');
+                    console.log('2. اذهب إلى Render/Clever Cloud Dashboard');
+                    console.log('3. Environment Variables → أضف متغير جديد:');
+                    console.log('   Key: SESSION_DATA');
+                    console.log('   Value: (الصق الكود الكامل)');
+                    console.log('4. احفظ وأعد نشر التطبيق\n');
 
                     connectionClosed = true;
                     
-                    // إبقاء السيرفر شغال 5 دقائق لنسخ البيانات
-                    console.log('⏰ السيرفر سيستمر 5 دقائق لنسخ البيانات...\n');
+                    console.log('✅ تم! يمكنك إغلاق السكريبت الآن (Ctrl+C)\n');
+                    
+                    // إغلاق بعد 30 ثانية
                     setTimeout(() => {
-                        console.log('\n👋 إغلاق السيرفر...\n');
+                        console.log('👋 إغلاق تلقائي...\n');
                         process.exit(0);
-                    }, 300000);
+                    }, 30000);
                 }
             }
 
@@ -211,20 +129,39 @@ async function createSession() {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const reason = lastDisconnect?.error?.output?.payload?.error || 'Unknown';
                 
-                console.log(`\n❌ الاتصال مغلق - كود: ${statusCode}, السبب: ${reason}\n`);
+                console.log(`\n❌ الاتصال مغلق\n`);
+                console.log(`   كود الخطأ: ${statusCode}`);
+                console.log(`   السبب: ${reason}\n`);
                 
                 if (statusCode === 515) {
-                    console.log('⚠️  خطأ 515 - IP محظور من WhatsApp!');
-                    console.log('💡 الحل: شغّل محلياً أو استخدم VPN\n');
+                    console.log('═'.repeat(70));
+                    console.log('⚠️  خطأ 515 - واتساب حظر هذا الـ IP مؤقتاً\n');
+                    console.log('🔧 الحلول المجربة:\n');
+                    console.log('1️⃣  انتظر 1-2 ساعة ثم حاول مرة أخرى');
+                    console.log('2️⃣  غيّر الشبكة تماماً:');
+                    console.log('   • من Wi-Fi → موبايل data (4G/5G)');
+                    console.log('   • أو العكس');
+                    console.log('3️⃣  جرب من مكان مختلف (بيت صديق، مقهى)');
+                    console.log('4️⃣  استخدم Hotspot من موبايل مختلف');
+                    console.log('5️⃣  أغلق VPN تماماً إذا كان مفعّل');
+                    console.log('6️⃣  أعد تشغيل الراوتر وانتظر 5 دقائق\n');
+                    console.log('💡 نصيحة: واتساب بيحظر IPs بشكل مؤقت بعد عدة محاولات');
+                    console.log('   الانتظار ساعة عادةً بيحل المشكلة\n');
+                    console.log('═'.repeat(70));
                 } else if (statusCode === 401 || statusCode === 403) {
-                    console.log('⚠️  QR منتهي - جرب مرة أخرى\n');
-                } else if (!connectionClosed) {
-                    console.log('🔄 إعادة المحاولة بعد 5 ثواني...\n');
-                    setTimeout(() => {
-                        qrCodeData = null;
-                        temporaryUrl = null;
-                        createSession();
-                    }, 5000);
+                    console.log('⚠️  QR منتهي أو غير صحيح');
+                    console.log('💡 شغّل السكريبت مرة أخرى وامسح QR بسرعة\n');
+                } else if (statusCode === 408 || statusCode === DisconnectReason.timedOut) {
+                    console.log('⚠️  انتهت مهلة الاتصال');
+                    console.log('💡 تحقق من اتصال الإنترنت وحاول مرة أخرى\n');
+                } else if (statusCode === DisconnectReason.loggedOut) {
+                    console.log('⚠️  تم تسجيل الخروج من الجلسة\n');
+                } else {
+                    console.log('⚠️  خطأ غير متوقع\n');
+                }
+                
+                if (!connectionClosed) {
+                    process.exit(1);
                 }
             }
 
@@ -234,27 +171,24 @@ async function createSession() {
         });
 
     } catch (error) {
-        console.error('❌ خطأ:', error.message);
-        console.log('🔄 إعادة المحاولة بعد 5 ثواني...\n');
-        setTimeout(() => {
-            qrCodeData = null;
-            temporaryUrl = null;
-            createSession();
-        }, 5000);
+        console.error('\n❌ خطأ فادح:', error.message);
+        console.log('\n💡 تحقق من:');
+        console.log('   • تثبيت المكتبات: npm install');
+        console.log('   • اتصال الإنترنت');
+        console.log('   • إصدار Node.js (يُفضل v18 أو أحدث)\n');
+        process.exit(1);
     }
 }
 
 // معالجة الإيقاف
 process.on('SIGINT', () => {
-    console.log('\n\n👋 إيقاف السيرفر...\n');
-    server.close();
+    console.log('\n\n👋 إيقاف السكريبت...\n');
     process.exit(0);
 });
 
-process.on('SIGTERM', () => {
-    console.log('\n\n👋 إيقاف السيرفر (SIGTERM)...\n');
-    server.close();
-    process.exit(0);
+process.on('unhandledRejection', (error) => {
+    console.error('\n❌ Unhandled Rejection:', error);
+    process.exit(1);
 });
 
 // بدء التشغيل
